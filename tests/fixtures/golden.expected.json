@@ -1,0 +1,39 @@
+{
+  "byte_size": 1533,
+  "canonical_text": "Alpha provenance\nSecond block\fBeta conclusion",
+  "classification": "extracted",
+  "document_uid": "e01397c073fb0f0e194b91783b4ef76fa93c3de2920c6a52df07c4d37760c32d",
+  "page_count": 2,
+  "passages": [
+    {
+      "bbox": [30.0, 38.17, 118.66, 53.29],
+      "char_end": 16,
+      "char_start": 0,
+      "page_number": 1,
+      "paragraph_number": 1,
+      "section_path": ["Introduction"],
+      "text": "Alpha provenance"
+    },
+    {
+      "bbox": [30.0, 68.18, 96.03, 83.29],
+      "char_end": 29,
+      "char_start": 17,
+      "page_number": 1,
+      "paragraph_number": 2,
+      "section_path": ["Introduction"],
+      "text": "Second block"
+    },
+    {
+      "bbox": [30.0, 38.17, 107.65, 53.29],
+      "char_end": 45,
+      "char_start": 30,
+      "page_number": 2,
+      "paragraph_number": 1,
+      "section_path": ["Conclusion"],
+      "text": "Beta conclusion"
+    }
+  ],
+  "sha256": "e01397c073fb0f0e194b91783b4ef76fa93c3de2920c6a52df07c4d37760c32d",
+  "source_basename": "golden.pdf",
+  "version_uid": "cc3168b6f5490b886f2b7c91392dc5a9573d8e3009fed799948321e9a63c6565"
+}

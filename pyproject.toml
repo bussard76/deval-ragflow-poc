@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools==75.3.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deval-ragflow"
+version = "0.1.0"
+description = "Small local PDF provenance and RAGFlow proof of concept"
+readme = "README.md"
+requires-python = ">=3.9,<3.13"
+dependencies = [
+  "httpx==0.28.1",
+  "PyMuPDF==1.26.5",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest==8.4.2",
+]
+
+[project.scripts]
+deval-ragflow = "deval_ragflow.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py39"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = ["integration: uses a configured live RAGFlow service"]
