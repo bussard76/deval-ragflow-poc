@@ -1,0 +1,52 @@
+{
+  "models": [
+    {
+      "id": "qwen-local",
+      "name": "Qwen 2.5 0.5B",
+      "provider": "Ollama · lokal",
+      "ragflow_model": "qwen2.5:0.5b@local@Ollama",
+      "description": "Kleines lokales Modell für den ersten MVP",
+      "enabled": true
+    },
+    {
+      "id": "gpt-5.6-luna",
+      "name": "GPT-5.6 Luna (Codex)",
+      "provider": "OpenAI Codex · Pi.dev",
+      "ragflow_model": "gpt-5.6-luna@codex@OpenAI",
+      "description": "In Pi.dev als openai-codex verfügbar; RAGFlow-Instanz codex erforderlich",
+      "enabled": true
+    },
+    {
+      "id": "gpt-5.6-sol",
+      "name": "GPT-5.6 Sol (Codex)",
+      "provider": "OpenAI Codex · Pi.dev",
+      "ragflow_model": "gpt-5.6-sol@codex@OpenAI",
+      "description": "In Pi.dev als openai-codex verfügbar; RAGFlow-Instanz codex erforderlich",
+      "enabled": true
+    },
+    {
+      "id": "gpt-5.6-terra",
+      "name": "GPT-5.6 Terra (Codex)",
+      "provider": "OpenAI Codex · Pi.dev",
+      "ragflow_model": "gpt-5.6-terra@codex@OpenAI",
+      "description": "In Pi.dev als openai-codex verfügbar; RAGFlow-Instanz codex erforderlich",
+      "enabled": true
+    },
+    {
+      "id": "gpt-4o",
+      "name": "GPT-4o",
+      "provider": "OpenAI",
+      "ragflow_model": "gpt-4o",
+      "description": "Nur aktivieren, wenn der Provider in RAGFlow eingerichtet ist",
+      "enabled": false
+    },
+    {
+      "id": "claude-sonnet",
+      "name": "Claude Sonnet",
+      "provider": "Anthropic",
+      "ragflow_model": "claude-sonnet",
+      "description": "Nur aktivieren, wenn der Provider in RAGFlow eingerichtet ist",
+      "enabled": false
+    }
+  ]
+}

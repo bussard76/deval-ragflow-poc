@@ -312,6 +312,20 @@ class RAGFlowAdapter:
             current += 1
         return result
 
+    async def list_chat_models(self) -> list[dict[str, Any]]:
+        """Return the active tenant chat models known by RAGFlow."""
+        payload = await self._request("GET", "/models", params={"type": "chat"})
+        data = _data(payload)
+        if isinstance(data, list):
+            items = data
+        elif isinstance(data, dict):
+            items = data.get("models", data.get("data", []))
+        else:
+            items = []
+        if not isinstance(items, list):
+            raise AdapterError("RAGFlow model response has no models list")
+        return [item for item in items if isinstance(item, dict)]
+
     async def ensure_chat(
         self,
         name: str,
@@ -336,22 +350,28 @@ class RAGFlowAdapter:
                 f"more than one RAGFlow chat has the deterministic name {name!r}"
             )
         chat_settings = {
-            "top_n": 1,
+            # Give the model several retrieved chunks so broad summary questions
+            # summarize the source material instead of one arbitrary chunk.
+            "top_n": 5,
             "top_k": 20,
             "rerank_candidates_count": 20,
             "similarity_threshold": 0.0,
-            "llm_setting": {"temperature": 0.1, "max_completion_tokens": 64},
-            # References are resolved locally from /retrieval; disabling
-            # RAGFlow's verbose citation prompt keeps local CPU generation small.
+            "llm_setting": {"temperature": 0.1, "max_completion_tokens": 512},
+            # Keep the summary broad and let RAGFlow place source markers next
+            # to the facts it used. Source resolution remains local below.
             "prompt_config": {
-                "quote": False,
+                "quote": True,
                 "system": (
                     "Antworte kurz und sachlich auf Deutsch. Nutze ausschließlich die Wissensbasis. "
+                    "Fasse bei allgemeinen Fragen die relevanten Ausschnitte zusammen. "
+                    "Belege jede sachliche Aussage direkt mit dem Quellenmarker von RAGFlow. "
                     "Wenn die Antwort nicht darin steht, sage: Nicht in der Wissensbasis gefunden.\n"
                     "Wissensbasis:\n{knowledge}"
                 ),
             },
         }
+        if llm_model:
+            chat_settings["llm_id"] = llm_model
         if matches:
             chat = matches[0]
             if not chat.get("id"):
@@ -408,7 +428,7 @@ class RAGFlowAdapter:
                 "session_id": session_id,
                 "question": question,
                 "stream": False,
-                "quote": False,
+                "quote": True,
             },
             timeout=max(360.0, self.timeout) if timeout is None else timeout,
         )

@@ -7,6 +7,10 @@ ragflow-runtime/
 ragflow-logs/
 data/
 
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
 # Python
 .venv/
 venv/

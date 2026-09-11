@@ -54,6 +54,10 @@ In RAGFlow unter **Settings → Model providers → Ollama** die Instanz `local`
 
 Auf Linux kann statt `host.docker.internal` die für Docker erreichbare Host-Adresse nötig sein.
 
+### GPT-5.6 Codex-Modelle für den Webchat
+
+`config/models.json` enthält außerdem die in Pi.dev unter `openai-codex` verfügbaren IDs `gpt-5.6-luna`, `gpt-5.6-sol` und `gpt-5.6-terra`. Dafür in RAGFlow unter **Settings → Model providers → OpenAI** eine Instanz `codex` anlegen, einen OpenAI-kompatiblen API-Endpunkt und Zugang hinterlegen und die drei IDs exakt als Chat-Modelle hinzufügen. Der Webchat verwendet dann z. B. `gpt-5.6-luna@codex@OpenAI`. Pi.dev's OAuth-Datei wird nicht automatisch von RAGFlow übernommen; für ein ChatGPT/Codex-Abo ist daher ein kompatibles Gateway erforderlich.
+
 ## 4. Beide PDFs ingestieren
 
 Beide Dateien sind `mixed`; deshalb ist `--allow-mixed` erforderlich:
@@ -106,7 +110,30 @@ RUN_LIVE_RAGFLOW_TESTS=true python -m pytest -q -rs tests/test_live_ragflow.py
 
 Ohne `RUN_LIVE_RAGFLOW_TESTS=true` wird der Live-Test absichtlich übersprungen. Mit gesetztem Flag sind Netzwerk-, Modell-, Parsing- und Citation-Fehler echte Testfehler.
 
-## 7. Optional: GraphRAG
+## 7. Webchat-Vertikalslice
+
+Nach dem Start von RAGFlow und dem Anlegen der Modell-Provider laufen API und UI getrennt:
+
+```bash
+# Terminal 1, Repository-Root
+.venv/bin/deval-webchat
+
+# Terminal 2
+cd frontend
+pnpm install
+pnpm dev
+```
+
+Die UI ist anschließend unter `http://localhost:5173` erreichbar. Sammlung anlegen, mehrere PDFs auswählen und den Status bis **GraphRAG bereit** verfolgen. Das Modell wird aus `config/models.json` geladen; deaktivierte Einträge bleiben unsichtbar. Erst nach dem erfolgreichen GraphRAG-Aufbau ist der Chat freigeschaltet. Zitate werden nach der Chatantwort separat über `/retrieval` aufgelöst. Der rechte Quellenbereich ist weiterhin nur ein gekennzeichneter Prototyp-Mock.
+
+Die Web-API läuft standardmäßig auf `http://127.0.0.1:8787` und stellt bereit:
+
+- `GET /api/collections` und `POST /api/collections`
+- `POST /api/collections/{id}/upload` (multipart, asynchron)
+- `GET /api/jobs/{id}` und `GET /api/collections/{id}/graph`
+- `GET /api/models`, `POST /api/chat/sessions`, `POST /api/query`, `POST /api/chat`
+
+## 8. Optional: GraphRAG
 
 Nach erfolgreichem Parsing kann der offizielle GraphRAG-Ablauf getestet werden:
 
@@ -116,7 +143,7 @@ python -m deval_ragflow graph --timeout 3600
 
 Der Befehl startet RAGFlows GraphRAG, wartet auf den dokumentierten Abschlusszustand und gibt den Graphen aus. Eine FalkorDB- oder separate Visualisierungsintegration ist in diesem PoC nicht enthalten; ein leerer Graph, fehlender Provider oder Timeout bleibt ein ehrliches Ergebnis.
 
-## 8. Aufräumen
+## 9. Aufräumen
 
 Die Compose-Hülle entfernt keine persistenten Volumes. Einen ausschließlich lokal erzeugten Dataset-Eintrag kann man nur mit seiner bekannten ID und der exakten Bestätigung löschen:
 

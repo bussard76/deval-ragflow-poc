@@ -1,11 +1,12 @@
 """Configuration with a deliberately dependency-free .env reader."""
 
+from __future__ import annotations
+
 import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
 from urllib.parse import urlsplit, urlunsplit
 
 from .errors import ConfigurationError
@@ -71,6 +72,7 @@ class Config:
     reconcile_max_pages: int = 20
     graph_timeout: float = 1800.0
     run_live_tests: bool = False
+    model_config_path: Path = field(default_factory=lambda: Path("config/models.json"))
     parser_config: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -126,8 +128,8 @@ class Config:
     @classmethod
     def from_env(
         cls,
-        environ: Optional[Mapping[str, str]] = None,
-        dotenv_path: Optional[Path] = None,
+        environ: Mapping[str, str] | None = None,
+        dotenv_path: Path | None = None,
     ):
         # Process variables override .env; an injected mapping has the highest
         # priority, which keeps configuration tests deterministic.
@@ -193,6 +195,7 @@ class Config:
             reconcile_max_pages=integer("RAGFLOW_RECONCILE_MAX_PAGES", 20),
             graph_timeout=number("RAGFLOW_GRAPH_TIMEOUT", 1800),
             run_live_tests=boolean("RUN_LIVE_RAGFLOW_TESTS", False),
+            model_config_path=Path(value("DEVAL_MODEL_CONFIG", "config/models.json")),
         )
 
 

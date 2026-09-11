@@ -38,6 +38,22 @@ def test_adapter_routes_multipart_patch_status_retrieval_graph_and_delete():
     def handler(request):
         requests.append(request)
         path = request.url.path
+        if path == "/api/v1/models" and request.method == "GET":
+            assert request.url.params["type"] == "chat"
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": [
+                        {
+                            "name": "model",
+                            "instance_name": "local",
+                            "provider_name": "Test",
+                            "model_type": ["chat"],
+                        }
+                    ],
+                },
+            )
         if path == "/api/v1/datasets" and request.method == "GET":
             return httpx.Response(
                 200,
@@ -61,8 +77,8 @@ def test_adapter_routes_multipart_patch_status_retrieval_graph_and_delete():
         if path == "/api/v1/chats" and request.method == "POST":
             body = json.loads(request.content)
             assert body["dataset_ids"] == ["dataset"] and body["llm_id"] == "model"
-            assert body["llm_setting"]["max_completion_tokens"] == 64
-            assert body["prompt_config"]["quote"] is False
+            assert body["llm_setting"]["max_completion_tokens"] == 512
+            assert body["prompt_config"]["quote"] is True
             return httpx.Response(
                 200, json={"code": 0, "data": {"id": "chat", "name": body["name"]}}
             )
@@ -73,7 +89,7 @@ def test_adapter_routes_multipart_patch_status_retrieval_graph_and_delete():
                 "session_id": "session",
                 "question": "fact?",
                 "stream": False,
-                "quote": False,
+                "quote": True,
             }
             return httpx.Response(
                 200,
@@ -183,6 +199,7 @@ def test_adapter_routes_multipart_patch_status_retrieval_graph_and_delete():
             transport=httpx.MockTransport(handler),
         )
         try:
+            assert (await adapter.list_chat_models())[0]["name"] == "model"
             dataset = await adapter.ensure_dataset(
                 "kb", embedding_model="e", chunk_method="naive", parser_config={"x": 1}
             )
@@ -225,6 +242,45 @@ def test_adapter_routes_multipart_patch_status_retrieval_graph_and_delete():
             assert (await adapter.get_graph("dataset"))["graph"] is not None
             await adapter.delete_owned_dataset("dataset", "dataset")
             assert any("authorization" in dict(r.headers) for r in requests)
+        finally:
+            await adapter.aclose()
+
+    run(exercise())
+
+
+def test_ensure_chat_reapplies_llm_id_to_existing_chat():
+    def handler(request):
+        if request.url.path == "/api/v1/chats" and request.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "code": 0,
+                    "data": {
+                        "chats": [{"id": "chat", "name": "deval-cli-dataset"}],
+                        "total": 1,
+                    },
+                },
+            )
+        if request.method == "PATCH" and request.url.path == "/api/v1/chats/chat":
+            body = json.loads(request.content)
+            assert body["llm_id"] == "model"
+            return httpx.Response(
+                200,
+                json={"code": 0, "data": {"id": "chat", "name": "deval-cli-dataset"}},
+            )
+        if request.url.path == "/api/v1/chats" and request.method == "POST":
+            raise AssertionError("chat should be patched, not created")
+        raise AssertionError(f"unexpected {request.method} {request.url.path}")
+
+    async def exercise():
+        adapter = RAGFlowAdapter(
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            chat = await adapter.ensure_chat(
+                "deval-cli-dataset", ["dataset"], llm_model="model"
+            )
+            assert chat["id"] == "chat"
         finally:
             await adapter.aclose()
 

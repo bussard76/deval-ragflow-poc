@@ -1,0 +1,108 @@
+export type GraphRAGStatus = "idle" | "processing" | "building" | "ready" | "error"
+
+export interface Collection {
+  id: string
+  name: string
+  status: GraphRAGStatus
+  documents: string[]
+  job?: {
+    id: string
+    files: string[]
+    completed: number
+    total: number
+    error: string
+  } | null
+}
+
+export interface Citation {
+  document: string
+  page: number | null
+  excerpt: string
+  resolved?: boolean
+}
+
+export interface Model {
+  id: string
+  name: string
+  provider: string
+  description: string
+  configured?: boolean
+}
+
+export interface ChatResponse {
+  answer: string
+  model: Model
+  citations: Citation[]
+}
+
+const API_BASE = "/api"
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`${API_BASE}${path}`, init)
+  let payload: unknown = null
+  try {
+    payload = await response.json()
+  } catch {
+    // Keep the HTTP status as the useful error for non-JSON failures.
+  }
+  if (!response.ok) {
+    const message =
+      typeof payload === "object" && payload !== null && "error" in payload
+        ? String(payload.error)
+        : `API request failed (${response.status})`
+    throw new Error(message)
+  }
+  return payload as T
+}
+
+export async function listCollections(): Promise<Collection[]> {
+  const payload = await request<{ collections: Collection[] }>("/collections")
+  return payload.collections
+}
+
+export async function getCollection(id: string): Promise<Collection> {
+  return request<Collection>(`/collections/${encodeURIComponent(id)}`)
+}
+
+export async function createCollection(name: string): Promise<Collection> {
+  return request<Collection>("/collections", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  })
+}
+
+export async function uploadCollection(
+  id: string,
+  files: File[],
+): Promise<Collection> {
+  const form = new FormData()
+  files.forEach((file) => form.append("files", file, file.name))
+  return request<Collection>(`/collections/${encodeURIComponent(id)}/upload`, {
+    method: "POST",
+    body: form,
+  })
+}
+
+export async function listModels(): Promise<Model[]> {
+  const payload = await request<{ models: Model[] }>("/models")
+  return payload.models
+}
+
+export async function sendChat(
+  collectionId: string,
+  modelId: string,
+  question: string,
+  conversationId: string,
+): Promise<ChatResponse> {
+  return request<ChatResponse>("/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      collection_id: collectionId,
+      model_id: modelId,
+      question,
+      conversation_id: conversationId,
+    }),
+  })
+}

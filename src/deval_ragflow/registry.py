@@ -359,6 +359,13 @@ class Registry:
             ).fetchone()
         return self._dataset(row) if row else None
 
+    def list_datasets(self) -> list[DatasetRecord]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM datasets ORDER BY name COLLATE NOCASE"
+            ).fetchall()
+        return [self._dataset(row) for row in rows]
+
     def get_dataset_by_remote_id(self, remote_dataset_id: str) -> DatasetRecord | None:
         with self._lock:
             row = self._connection.execute(

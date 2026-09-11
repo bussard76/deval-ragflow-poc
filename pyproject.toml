@@ -20,6 +20,7 @@ test = [
 
 [project.scripts]
 deval-ragflow = "deval_ragflow.cli:main"
+deval-webchat = "deval_ragflow.web:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

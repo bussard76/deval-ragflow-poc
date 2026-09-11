@@ -48,8 +48,28 @@ docker exec deval-ollama ollama pull qwen2.5:0.5b
 
 In RAGFlow **Settings → Model providers → Ollama**, add instance `local` with base URL `http://host.docker.internal:11434` and model `qwen2.5:0.5b` as a chat model. Keep the model labels in `.env.example`; do not put provider credentials in tracked files. CPU generation is intentionally small and can take a few minutes; use `ask --timeout 360` when needed.
 
+### GPT-5.6 Codex models
+
+The webchat catalog also exposes the exact GPT-5.6 model IDs currently listed by Pi's `openai-codex` provider: `gpt-5.6-luna`, `gpt-5.6-sol`, and `gpt-5.6-terra`. RAGFlow does not read Pi's `~/.pi/agent/auth.json` or speak the Codex OAuth transport directly. To use these entries, configure an OpenAI-compatible RAGFlow provider instance named `codex`, add each exact model ID as a chat model, and keep the composite values used by `config/models.json` (for example `gpt-5.6-luna@codex@OpenAI`). A compatible gateway/API credential is required; no credential is stored in the repository or sent to the browser.
+
 `wait` checks the official readiness endpoint, not process startup order:
 `http://127.0.0.1:9380/api/v1/system/healthz`. Use `ps`, `logs`, and `down` for ordinary lifecycle operations. The wrapper never removes persistent volumes. If the upstream release changes, update the commit, routes, compose provenance, fixtures, and tests together; see [DECISIONS.md](DECISIONS.md).
+
+## Webchat UI
+
+Die React/Vite-Oberfläche basiert weitgehend auf dem Figma-Export und verbindet den ersten Happy Path mit der lokalen Web-API:
+
+```bash
+# Terminal 1: Backend-API (aus dem Repository-Root)
+.venv/bin/deval-webchat
+
+# Terminal 2: Frontend
+cd frontend
+pnpm install
+pnpm dev
+```
+
+Die API stellt Collection-, Upload-, Job-/Graph-Status-, Modell-, Retrieval- und Chat-Endpunkte bereit. Uploads laufen asynchron; die UI pollt den Collection-Status bis `GraphRAG bereit`. Modelle werden ohne Secrets aus `config/models.json` geladen. Der Quellenbereich ist noch als Prototyp gekennzeichnet; PDF-Navigation und Hervorhebung folgen später. Details stehen in `frontend/README.md`.
 
 ## CLI
 
