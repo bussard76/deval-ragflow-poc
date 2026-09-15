@@ -1,8 +1,14 @@
 # DEval – RAGFlow PDF-Provenance-PoC
 
-DEval ist ein lokaler Webchat für PDF-Dokumente. PyMuPDF extrahiert die Dokumente deterministisch, SQLite speichert die lokale Provenienz und RAGFlow übernimmt Parsing, Retrieval, GraphRAG und die Antwortgenerierung.
+DEval ist eine schlanke Weboberfläche vor RAGFlow. Sie macht die in RAGFlow verwalteten Wissensdatenbanken im Browser per RAG chatbar und ergänzt Uploads, Verarbeitungsstatus, GraphRAG und deterministische PDF-Quellen. PyMuPDF extrahiert die Dokumente lokal, SQLite speichert die Provenienz und RAGFlow übernimmt Parsing, Retrieval, GraphRAG und Antwortgenerierung.
 
 Die LLM-Inferenz läuft in diesem Setup **nicht lokal über Ollama**, sondern über einen in RAGFlow konfigurierten externen/OpenAI-kompatiblen Provider. Nur die Embeddings laufen standardmäßig lokal im offiziellen RAGFlow-TEI-Container.
+
+## Das zentrale Prinzip: Chats bleiben im Browser
+
+DEval speichert Chatverläufe nicht serverseitig. Jeder Chat, das ausgewählte Modell und die Nachrichten werden ausschließlich im Browser gespeichert. Für eine neue Antwort übergibt der Browser den bisherigen Verlauf jeweils vollständig an das DEval-Backend; DEval leitet ihn stateless an RAGFlow weiter, ohne eine RAGFlow-Session oder Chat-Historie anzulegen.
+
+RAGFlow benötigt für seinen OpenAI-kompatiblen Endpunkt weiterhin ein technisches Chat-Assistant-Objekt. Dieses enthält nur die Verknüpfung von Wissensdatenbank, Modell und Prompt – nicht den Gesprächsverlauf. Die eigentlichen lokalen Chats bleiben im Browser und können dort getrennt verwaltet werden.
 
 ## Schnellstart
 
@@ -198,7 +204,7 @@ Wichtige Eigenschaften:
 - Malformed, verschlüsselte, leere und reine Scan-PDFs werden lokal registriert, aber nicht automatisch hochgeladen.
 - Mixed-PDFs benötigen im CLI `--allow-mixed`; im Webchat wird die Verarbeitung entsprechend angezeigt.
 - Zitate werden nicht vom LLM geraten: Die Chatantwort und die Quellenauflösung sind getrennt. `CitationResolver` ordnet RAGFlow-Referenzen deterministisch lokalen Seiten und Absätzen zu.
-- Der Webchat prüft die GraphRAG-Bereitschaft. Standardmäßig erzeugt er keine RAGFlow-Session und sendet den lokalen Verlauf über `/api/v1/openai/{chat_id}/chat/completions`; `DEVAL_RAGFLOW_STATELESS_CHAT=false` schaltet testweise auf den alten Session-Flow zurück.
+- Der Webchat prüft die GraphRAG-Bereitschaft. Standardmäßig erzeugt er keine RAGFlow-Session und sendet den lokalen Verlauf über `/api/v1/openai/{chat_id}/chat/completions`; `DEVAL_RAGFLOW_STATELESS_CHAT=false` schaltet testweise auf den alten Session-Flow zurück. Ein technisches RAGFlow-Chat-Assistant-Objekt kann dabei vorhanden sein, enthält aber keine Chat-Nachrichten.
 - Die normale Quellenauflösung verwendet weiterhin einen separaten Retrieval-Aufruf ohne KG-Nutzung. Im CLI muss KG-Nutzung mit `query --use-kg` explizit angefordert werden.
 
 ## CLI
