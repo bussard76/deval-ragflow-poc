@@ -184,6 +184,7 @@ def test_adapter_routes_multipart_patch_status_retrieval_graph_and_delete():
             assert body["dataset_ids"] == ["dataset"] and body["llm_id"] == "model"
             assert body["llm_setting"]["max_completion_tokens"] == 512
             assert body["prompt_config"]["quote"] is True
+            assert body["prompt_config"]["cross_languages"] == []
             return httpx.Response(
                 200, json={"code": 0, "data": {"id": "chat", "name": body["name"]}}
             )
@@ -260,6 +261,7 @@ def test_adapter_routes_multipart_patch_status_retrieval_graph_and_delete():
                 body["knn_top_k"] == 10
                 and body["knn_num_candidates"] == 20
                 and body["use_kg"] is True
+                and body["cross_languages"] == ["German", "English"]
             )
             return httpx.Response(
                 200,
@@ -345,6 +347,7 @@ def test_adapter_routes_multipart_patch_status_retrieval_graph_and_delete():
                 knn_top_k=10,
                 knn_num_candidates=20,
                 use_kg=True,
+                cross_languages=["German", "English"],
             )
             assert result.references[0]["document_id"] == "remote-doc"
             task, _ = await adapter.start_graph("dataset")

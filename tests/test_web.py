@@ -18,6 +18,7 @@ from deval_ragflow.models import (
 from deval_ragflow.web import (  # type: ignore[import-not-found]
     WebApplication,
     WebError,
+    _contextualize_question,
     _parse_multipart,
     build_server,
 )
@@ -32,9 +33,11 @@ class FakeAdapter:
     def __init__(self, *args, **kwargs):
         self.last_dataset_created = True
         self.chat_llm_model = ""
+        self.chat_cross_languages: list[str] = []
         self.chat_session_calls = 0
         self.chat_completion_calls: list[dict[str, Any]] = []
         self.retrieve_calls: list[dict[str, object]] = []
+        self.retrieve_questions: list[str] = []
         type(self).instances.append(self)
 
     async def aclose(self):
@@ -68,8 +71,9 @@ class FakeAdapter:
     async def document_status(self, *args, **kwargs):
         return RemoteStatus("DONE", 1.0, "done", ("done",), 1, 1, {"run": "DONE"})
 
-    async def ensure_chat(self, name, dataset_ids, *, llm_model=""):
+    async def ensure_chat(self, name, dataset_ids, *, llm_model="", cross_languages=()):
         self.chat_llm_model = llm_model
+        self.chat_cross_languages = list(cross_languages)
         return {"id": "remote-chat"}
 
     async def create_chat_session(self, chat_id, *, name=""):
@@ -78,7 +82,12 @@ class FakeAdapter:
 
     async def chat_completion(self, chat_id, question, session_id, **kwargs):
         self.chat_completion_calls.append(
-            {"chat_id": chat_id, "question": question, "session_id": session_id, **kwargs}
+            {
+                "chat_id": chat_id,
+                "question": question,
+                "session_id": session_id,
+                **kwargs,
+            }
         )
         return {
             "code": 0,
@@ -107,6 +116,7 @@ class FakeAdapter:
 
     async def retrieve(self, *args, **kwargs):
         self.retrieve_calls.append(kwargs)
+        self.retrieve_questions.append(str(args[0]) if args else "")
         return RetrievalResult(
             chunks=[],
             references=[
@@ -128,6 +138,20 @@ class FakeAdapter:
         if type(self).empty_graph:
             return {"graph": {"nodes": [], "edges": []}}
         return {"graph": {"nodes": [{"id": "n"}], "edges": []}}
+
+
+def test_follow_up_question_keeps_previous_topic_for_retrieval():
+    messages = [
+        {"role": "user", "content": "Was sind food shortage Indikatoren?"},
+        {"role": "assistant", "content": "Eine Liste von Indikatoren."},
+        {"role": "user", "content": "Antworte ausführlich"},
+    ]
+    assert _contextualize_question(messages, "Antworte ausführlich") == (
+        "Was sind food shortage Indikatoren?\n\nAntworte ausführlich"
+    )
+    assert _contextualize_question(messages, "Welche Quellen gibt es?") == (
+        "Welche Quellen gibt es?"
+    )
 
 
 def test_parse_multipart_extracts_multiple_files():
@@ -209,10 +233,15 @@ def test_web_application_wires_collection_upload_graph_and_chat(
         app.registry.upsert_index("Web collection", "graph", state="DONE", progress=1.0)
 
         response = app.answer(
-            "Web collection", "local", "What is the result?", "conversation"
+            "Web collection",
+            "local",
+            "What is the result?",
+            "conversation",
+            cross_languages=["English", "German"],
         )
         assert response["answer"] == "Eine echte Antwort [ID:0]."
         assert response["model"]["id"] == "local"
+        assert response["cross_languages"] == ["German", "English"]
         assert len(response["citations"]) == 1
         citation = response["citations"][0]
         passage_uid = citation["source"]["passage_uid"]
@@ -247,6 +276,40 @@ def test_web_application_wires_collection_upload_graph_and_chat(
             "role": "user",
             "content": "What is the result?",
         }
+        assert adapter.chat_cross_languages == ["German", "English"]
+        assert adapter.retrieve_calls[-1]["cross_languages"] == [
+            "German",
+            "English",
+        ]
+        app.answer(
+            "Web collection",
+            "local",
+            "Antworte ausführlich",
+            "conversation",
+            messages=[
+                {"role": "user", "content": "Wie wirkt sich EZ aus?"},
+                {"role": "assistant", "content": "Eine Antwort."},
+                {"role": "user", "content": "Was sind food shortage Indikatoren?"},
+                {"role": "assistant", "content": "Eine Liste."},
+            ],
+            cross_languages=["German", "English"],
+        )
+        followup_adapter = FakeAdapter.instances[-1]
+        expected_followup = (
+            "Was sind food shortage Indikatoren?\n\nAntworte ausführlich"
+        )
+        assert (
+            followup_adapter.chat_completion_calls[-1]["question"] == expected_followup
+        )
+        assert followup_adapter.retrieve_questions[-1] == expected_followup
+        app.answer(
+            "Web collection",
+            "local",
+            "What is the result?",
+            "conversation",
+            cross_languages=[],
+        )
+        assert len(app._chats) == 2
 
         second = DocumentExtraction(
             "second-doc",
@@ -464,6 +527,19 @@ def test_models_filter_catalog_to_ragflow_chat_models(config, tmp_path, monkeypa
         )
         with pytest.raises(WebError, match="not configured in RAGFlow"):
             app._model("missing")
+    finally:
+        app.close()
+
+
+def test_cross_language_validation_rejects_unsupported_api_values(config):
+    app = WebApplication(config)
+    try:
+        with pytest.raises(WebError, match="cross_languages must be an array"):
+            app.retrieve("missing", "question", "English")
+        with pytest.raises(WebError, match="unsupported cross-language"):
+            app.retrieve("missing", "question", ["French"])
+        with pytest.raises(WebError, match="must not contain duplicates"):
+            app.retrieve("missing", "question", ["German", "German"])
     finally:
         app.close()
 

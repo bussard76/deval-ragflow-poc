@@ -143,9 +143,7 @@ class RAGFlowAdapter:
         if client is not None:
             self._client = client
             if api_key:
-                self._client.headers.update(
-                    {"Authorization": "Bearer " + api_key}
-                )
+                self._client.headers.update({"Authorization": "Bearer " + api_key})
         else:
             headers = {"Accept": "application/json"}
             if api_key:
@@ -408,6 +406,7 @@ class RAGFlowAdapter:
         dataset_ids: Sequence[str],
         *,
         llm_model: str = "",
+        cross_languages: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         if not isinstance(name, str) or not name.strip():
             raise AdapterError("RAGFlow chat name must not be empty")
@@ -437,8 +436,13 @@ class RAGFlowAdapter:
             # to the facts it used. Source resolution remains local below.
             "prompt_config": {
                 "quote": True,
+                "cross_languages": list(cross_languages or ()),
                 "system": (
-                    "Antworte kurz und sachlich auf Deutsch. Nutze ausschließlich die Wissensbasis. "
+                    "Antworte sachlich auf Deutsch und richte die Ausführlichkeit nach der Anfrage. "
+                    "Wenn ausdrücklich eine ausführliche Antwort verlangt wird, erläutere die relevanten "
+                    "Inhalte der Wissensbasis vollständig statt sie nur aufzuzählen. "
+                    "Nutze ausschließlich die Wissensbasis. "
+                    "Berücksichtige bei kurzen Rückfragen den bisherigen Gesprächskontext. "
                     "Fasse bei allgemeinen Fragen die relevanten Ausschnitte zusammen. "
                     "Belege jede sachliche Aussage direkt mit dem Quellenmarker von RAGFlow. "
                     "Wenn die Antwort nicht darin steht, sage: Nicht in der Wissensbasis gefunden.\n"
@@ -518,9 +522,7 @@ class RAGFlowAdapter:
             choices = openai_payload.get("choices")
             first_choice = choices[0] if isinstance(choices, list) and choices else None
             message = (
-                first_choice.get("message")
-                if isinstance(first_choice, dict)
-                else None
+                first_choice.get("message") if isinstance(first_choice, dict) else None
             )
             answer = message.get("content") if isinstance(message, dict) else None
             if not isinstance(answer, str) or not answer.strip():
@@ -863,6 +865,7 @@ class RAGFlowAdapter:
         keyword: bool = False,
         highlight: bool = True,
         use_kg: bool = False,
+        cross_languages: Sequence[str] | None = None,
         reference_metadata: dict[str, Any] | None = None,
     ) -> RetrievalResult:
         body: dict[str, Any] = {
@@ -882,6 +885,8 @@ class RAGFlowAdapter:
             "highlight": highlight,
             "use_kg": use_kg,
         }
+        if cross_languages is not None:
+            body["cross_languages"] = list(cross_languages)
         if reference_metadata is not None:
             body["reference_metadata"] = reference_metadata
         payload = await self._request("POST", "/retrieval", json_body=body)

@@ -1,5 +1,7 @@
 export type GraphRAGStatus = "idle" | "processing" | "building" | "ready" | "error"
 export type GraphFreshness = "empty" | "current" | "updating" | "outdated" | "error"
+export const CROSS_LANGUAGE_OPTIONS = ["German", "English"] as const
+export type CrossLanguage = typeof CROSS_LANGUAGE_OPTIONS[number]
 
 export interface GraphInfo {
   state: GraphFreshness
@@ -64,6 +66,7 @@ export interface ChatResponse {
   answer: string
   model: Model
   citations: Citation[]
+  cross_languages?: CrossLanguage[]
 }
 
 const API_BASE = "/api"
@@ -136,6 +139,7 @@ export async function sendChat(
   question: string,
   conversationId: string,
   history: ChatMessage[] = [],
+  crossLanguages: CrossLanguage[] = [],
 ): Promise<ChatResponse> {
   return request<ChatResponse>("/chat", {
     method: "POST",
@@ -146,6 +150,7 @@ export async function sendChat(
       question,
       conversation_id: conversationId,
       messages: history,
+      cross_languages: crossLanguages,
     }),
   })
 }

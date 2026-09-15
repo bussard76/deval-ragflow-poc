@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react"
 import {
+  CROSS_LANGUAGE_OPTIONS,
   type Citation,
   type Collection,
+  type CrossLanguage,
   type GraphRAGStatus,
   type Model,
   createCollection,
@@ -30,6 +32,7 @@ interface StoredChat {
   id: string
   messages: Message[]
   modelId: string | null
+  crossLanguages: CrossLanguage[]
 }
 
 interface StoredChatState {
@@ -38,13 +41,25 @@ interface StoredChatState {
 }
 
 const CHAT_STORAGE_PREFIX = "deval-webchat:v1:"
+// Keep the pre-selector behavior by default; users can opt into either or both.
+const DEFAULT_CROSS_LANGUAGES: CrossLanguage[] = []
 
 function chatStorageKey(collectionId: string) {
   return `${CHAT_STORAGE_PREFIX}${encodeURIComponent(collectionId)}`
 }
 
 function newStoredChat(): StoredChat {
-  return { id: crypto.randomUUID(), messages: [], modelId: null }
+  return {
+    id: crypto.randomUUID(),
+    messages: [],
+    modelId: null,
+    crossLanguages: [...DEFAULT_CROSS_LANGUAGES],
+  }
+}
+
+function sanitizeCrossLanguages(value: unknown): CrossLanguage[] {
+  if (!Array.isArray(value)) return [...DEFAULT_CROSS_LANGUAGES]
+  return CROSS_LANGUAGE_OPTIONS.filter((language) => value.includes(language))
 }
 
 function emptyChatState(): StoredChatState {
@@ -93,7 +108,8 @@ function isStoredChat(value: unknown): value is StoredChat {
     typeof chat.id === "string" &&
     chat.id.length > 0 &&
     Array.isArray(chat.messages) &&
-    (chat.modelId === null || typeof chat.modelId === "string")
+    (chat.modelId === null || typeof chat.modelId === "string") &&
+    (chat.crossLanguages === undefined || Array.isArray(chat.crossLanguages))
   )
 }
 
@@ -118,9 +134,11 @@ function readStoredChats(collectionId: string): StoredChatState {
     if (!value || typeof value !== "object") return empty
     const stored = value as Record<string, unknown>
     if (Array.isArray(stored.chats)) {
-      const chats = stored.chats
-        .filter(isStoredChat)
-        .map((chat) => ({ ...chat, messages: sanitizeMessages(chat.messages) }))
+      const chats = stored.chats.filter(isStoredChat).map((chat) => ({
+        ...chat,
+        messages: sanitizeMessages(chat.messages),
+        crossLanguages: sanitizeCrossLanguages(chat.crossLanguages),
+      }))
       if (!chats.length) return empty
       const activeChatId =
         typeof stored.activeChatId === "string" &&
@@ -136,6 +154,7 @@ function readStoredChats(collectionId: string): StoredChatState {
         ...newStoredChat(),
         messages: sanitizeMessages(stored.messages),
         modelId: typeof stored.modelId === "string" ? stored.modelId : null,
+        crossLanguages: sanitizeCrossLanguages(stored.crossLanguages),
       }
       return { activeChatId: chat.id, chats: [chat] }
     }
@@ -640,6 +659,7 @@ function ChatPanel({
     configurableModels.find((model) => model.id === chat?.modelId) ??
     configurableModels[0] ??
     null
+  const crossLanguages = chat?.crossLanguages ?? DEFAULT_CROSS_LANGUAGES
 
   function updateChat(
     chatId: string,
@@ -669,6 +689,21 @@ function ChatPanel({
       activeChatId: next.id,
       chats: [next, ...current.chats],
     }))
+  }
+
+  function toggleCrossLanguage(language: CrossLanguage) {
+    updateChat(activeChatId, (current) => {
+      const selected = current.crossLanguages.includes(language)
+      const next = selected
+        ? current.crossLanguages.filter((item) => item !== language)
+        : [...current.crossLanguages, language]
+      return {
+        ...current,
+        crossLanguages: CROSS_LANGUAGE_OPTIONS.filter((item) =>
+          next.includes(item),
+        ),
+      }
+    })
   }
 
   useEffect(() => {
@@ -722,6 +757,7 @@ function ChatPanel({
         question,
         conversationId.current,
         history,
+        crossLanguages,
       )
       const assistantMsg: Message = {
         id: crypto.randomUUID(),
@@ -913,6 +949,26 @@ function ChatPanel({
 
         {/* Model select */}
         <div className="flex items-center gap-3">
+          <fieldset className="flex items-center gap-2 shrink-0">
+            <legend className="font-mono text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider mr-1">
+              Suche in
+            </legend>
+            {CROSS_LANGUAGE_OPTIONS.map((language) => (
+              <label
+                key={language}
+                className="inline-flex items-center gap-1 text-[12px] text-[var(--foreground)]"
+              >
+                <input
+                  type="checkbox"
+                  checked={crossLanguages.includes(language)}
+                  onChange={() => toggleCrossLanguage(language)}
+                  disabled={loading || graphUpdating}
+                  className="accent-[var(--accent)]"
+                />
+                {language === "German" ? "Deutsch" : "English"}
+              </label>
+            ))}
+          </fieldset>
           <label
             htmlFor="model-select"
             className="font-mono text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider shrink-0"

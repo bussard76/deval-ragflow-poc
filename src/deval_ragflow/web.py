@@ -29,6 +29,8 @@ MAX_NAME_LENGTH = 160
 MAX_QUESTION_LENGTH = 10_000
 _ALLOWED_ORIGINS = {"http://localhost:5173", "http://127.0.0.1:5173"}
 _FILENAME_RE = re.compile(r'filename="([^"]*)"', re.IGNORECASE)
+CROSS_LANGUAGE_OPTIONS = ("German", "English")
+_CROSS_LANGUAGE_SET = frozenset(CROSS_LANGUAGE_OPTIONS)
 
 
 class WebError(Exception):
@@ -107,6 +109,28 @@ def _json_bytes(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
+def _normalize_cross_languages(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise WebError(400, "cross_languages must be an array")
+    if any(not isinstance(language, str) for language in value):
+        raise WebError(400, "cross_languages must contain language names")
+    if len(set(value)) != len(value):
+        raise WebError(400, "cross_languages must not contain duplicates")
+    unsupported = [
+        language for language in value if language not in _CROSS_LANGUAGE_SET
+    ]
+    if unsupported:
+        raise WebError(
+            400,
+            "unsupported cross-language; choose German or English",
+        )
+    # Keep cache keys and RAGFlow prompt settings deterministic regardless of
+    # the order in which a client sends the selected checkboxes.
+    return [language for language in CROSS_LANGUAGE_OPTIONS if language in value]
+
+
 def _remove_temp_dir(path: Path) -> None:
     try:
         shutil.rmtree(path, ignore_errors=True)
@@ -173,6 +197,23 @@ def _normalize_chat_messages(value: Any, question: str) -> list[dict[str, str]]:
     else:
         messages[-1]["content"] = question
     return messages
+
+
+_FOLLOW_UP_RE = re.compile(
+    r"\b(?:antworte|beantworte|erkläre|erlaeutere|erläutere|vertiefe|"
+    r"präzisiere|praezisiere|ausführlich|ausführlicher|detailliert|"
+    r"genauer|mehr dazu|more detail|elaborate|explain further|tell me more)\b",
+    re.IGNORECASE,
+)
+
+
+def _contextualize_question(messages: list[dict[str, str]], question: str) -> str:
+    previous_questions = [
+        message["content"] for message in messages if message["role"] == "user"
+    ]
+    if len(previous_questions) < 2 or not _FOLLOW_UP_RE.search(question):
+        return question
+    return f"{previous_questions[-2]}\n\n{question}"
 
 
 class WebApplication:
@@ -763,12 +804,16 @@ class WebApplication:
         dataset: Any,
         model: ModelOption,
         conversation_id: str,
+        cross_languages: list[str] | None = None,
     ) -> ChatHandle:
         cache_key = conversation_id
         chat_name = f"deval-web-{conversation_id}"
         if self.config.stateless_chat:
-            cache_key = f"stateless:{dataset.dataset_scope}:{model.id}"
-            chat_name = f"deval-web-stateless-{uuid.uuid5(uuid.NAMESPACE_URL, cache_key)}"
+            language_key = ",".join(cross_languages or ()) or "none"
+            cache_key = f"stateless:{dataset.dataset_scope}:{model.id}:{language_key}"
+            chat_name = (
+                f"deval-web-stateless-{uuid.uuid5(uuid.NAMESPACE_URL, cache_key)}"
+            )
         with self._lock:
             handle = self._chats.get(cache_key)
             if handle is not None:
@@ -784,6 +829,7 @@ class WebApplication:
             chat_name,
             [dataset.remote_dataset_id],
             llm_model=model.ragflow_model,
+            cross_languages=cross_languages,
         )
         chat_id = str(chat.get("id", ""))
         if not chat_id:
@@ -806,6 +852,7 @@ class WebApplication:
         dataset: Any,
         scope: str,
         question: str,
+        cross_languages: list[str] | None = None,
     ) -> tuple[Any, list[Any]]:
         retrieved = await adapter.retrieve(
             question,
@@ -817,6 +864,7 @@ class WebApplication:
             rerank_candidates_count=20,
             highlight=False,
             use_kg=False,
+            cross_languages=cross_languages,
         )
         citations = CitationResolver(
             self.registry, config.citation_threshold
@@ -826,7 +874,10 @@ class WebApplication:
         )
         return retrieved, citations
 
-    def retrieve(self, scope: str, question: str) -> dict[str, Any]:
+    def retrieve(
+        self, scope: str, question: str, cross_languages: Any = None
+    ) -> dict[str, Any]:
+        languages = _normalize_cross_languages(cross_languages)
         dataset = self.registry.get_dataset(scope)
         if dataset is None:
             raise WebError(404, "collection not found")
@@ -844,11 +895,12 @@ class WebApplication:
             )
             try:
                 retrieved, citations = await self._retrieve_citations(
-                    adapter, config, dataset, scope, question
+                    adapter, config, dataset, scope, question, languages
                 )
                 references = retrieved.references or retrieved.chunks
                 return {
                     "question": question,
+                    "cross_languages": list(languages),
                     "results": references,
                     "citations": self._citation_views(
                         citations, references, scope, dataset.remote_dataset_id
@@ -863,8 +915,13 @@ class WebApplication:
             raise WebError(502, f"RAGFlow retrieval failed: {exc}") from exc
 
     def create_chat_session(
-        self, scope: str, model_id: str, conversation_id: str = ""
+        self,
+        scope: str,
+        model_id: str,
+        conversation_id: str = "",
+        cross_languages: Any = None,
     ) -> dict[str, Any]:
+        languages = _normalize_cross_languages(cross_languages)
         dataset = self.registry.get_dataset(scope)
         if dataset is None:
             raise WebError(404, "collection not found")
@@ -878,6 +935,7 @@ class WebApplication:
                 "conversation_id": conversation_id,
                 "collection_id": scope,
                 "model": model.public_dict(),
+                "cross_languages": list(languages),
             }
         config = self._collection_config(dataset.name)
 
@@ -887,7 +945,7 @@ class WebApplication:
             )
             try:
                 await self._ensure_chat_session(
-                    adapter, dataset, model, conversation_id
+                    adapter, dataset, model, conversation_id, languages
                 )
             finally:
                 await adapter.aclose()
@@ -898,6 +956,7 @@ class WebApplication:
                 "conversation_id": conversation_id,
                 "collection_id": scope,
                 "model": model.public_dict(),
+                "cross_languages": list(languages),
             }
         except WebError:
             raise
@@ -995,7 +1054,9 @@ class WebApplication:
         question: str,
         conversation_id: str,
         messages: Any = None,
+        cross_languages: Any = None,
     ) -> dict[str, Any]:
+        languages = _normalize_cross_languages(cross_languages)
         dataset = self.registry.get_dataset(collection_scope)
         if dataset is None:
             raise WebError(404, "collection not found")
@@ -1008,6 +1069,13 @@ class WebApplication:
         if len(question) > MAX_QUESTION_LENGTH:
             raise WebError(400, "question is too long")
         chat_messages = _normalize_chat_messages(messages, question)
+        retrieval_question = _contextualize_question(chat_messages, question)
+        completion_messages = chat_messages
+        if retrieval_question != question:
+            completion_messages = [
+                *chat_messages[:-1],
+                {**chat_messages[-1], "content": retrieval_question},
+            ]
         conversation_id = self._conversation_id(conversation_id)
         model = self._model(model_id)
         config = self._collection_config(dataset.name)
@@ -1018,13 +1086,13 @@ class WebApplication:
             )
             try:
                 handle = await self._ensure_chat_session(
-                    adapter, dataset, model, conversation_id
+                    adapter, dataset, model, conversation_id, languages
                 )
                 completion = await adapter.chat_completion(
                     handle.chat_id,
-                    question,
+                    retrieval_question,
                     handle.session_id,
-                    messages=chat_messages,
+                    messages=completion_messages,
                     stateless=self.config.stateless_chat,
                 )
                 data = completion.get("data")
@@ -1032,7 +1100,12 @@ class WebApplication:
                 if not isinstance(answer, str) or not answer.strip():
                     raise DevalError("RAGFlow chat completion returned no answer")
                 fallback_retrieved, fallback_citations = await self._retrieve_citations(
-                    adapter, config, dataset, collection_scope, question
+                    adapter,
+                    config,
+                    dataset,
+                    collection_scope,
+                    retrieval_question,
+                    languages,
                 )
                 reference_chunks = _completion_reference_chunks(completion)
                 citations = (
@@ -1050,6 +1123,7 @@ class WebApplication:
                     "conversation_id": conversation_id,
                     "collection_id": collection_scope,
                     "model": model.public_dict(),
+                    "cross_languages": list(languages),
                     "citations": self._citation_views(
                         citations,
                         references,
@@ -1221,6 +1295,7 @@ class WebHandler(BaseHTTPRequestHandler):
                         str(payload.get("collection_id", "")),
                         str(payload.get("model_id", "")),
                         str(payload.get("conversation_id", "")),
+                        payload.get("cross_languages"),
                     ),
                 )
                 return
@@ -1233,6 +1308,7 @@ class WebHandler(BaseHTTPRequestHandler):
                     self.application.retrieve(
                         str(payload.get("collection_id", "")),
                         str(payload.get("question", "")),
+                        payload.get("cross_languages"),
                     ),
                 )
                 return
@@ -1248,6 +1324,7 @@ class WebHandler(BaseHTTPRequestHandler):
                         str(payload.get("question", "")),
                         str(payload.get("conversation_id", "")),
                         payload.get("messages"),
+                        payload.get("cross_languages"),
                     ),
                 )
                 return
