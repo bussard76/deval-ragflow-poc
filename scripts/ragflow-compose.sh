@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Stage and run the official RAGFlow v0.27.1 compose directory with a generated runtime env.
+# Stage and run the official RAGFlow v0.27.2 compose directory with a generated runtime env.
 set -euo pipefail
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-STATE_DIR=${RAGFLOW_COMPOSE_STATE_DIR:-"$ROOT/.data/ragflow-v0.27.1"}
+STATE_DIR=${RAGFLOW_COMPOSE_STATE_DIR:-"$ROOT/.data/ragflow-v0.27.2"}
 SOURCE_DIR="$STATE_DIR/source"
 DOCKER_DIR="$STATE_DIR/docker"
 ENV_FILE="$DOCKER_DIR/.env"
 UPSTREAM=https://github.com/infiniflow/ragflow.git
-COMMIT=b9df87c4c75a5b0d35c90d15329fc0f6f91cb73e
-IMAGE=infiniflow/ragflow:v0.27.1
+COMMIT=a024bea0cd93f39e6652a42bf84dd20c55bc560b
+IMAGE=infiniflow/ragflow:v0.27.2
 
 fail() {
   printf 'ragflow-compose: %s\n' "$*" >&2
@@ -47,7 +47,8 @@ stage() {
     mv "$saved_env" "$ENV_FILE"
   fi
   if ! grep -Fq '# Generated runtime values;' "$ENV_FILE"; then
-    python3 - "$ENV_FILE" <<'PY'
+    RAGFLOW_IMAGE="$IMAGE" python3 - "$ENV_FILE" <<'PY'
+import os
 import secrets
 import sys
 from pathlib import Path
@@ -60,7 +61,7 @@ values = {
     "DEVICE": "cpu",
     "METADATA_DB_PROFILE": "mysql",
     "COMPOSE_PROFILES": "elasticsearch,cpu,metadata-mysql,tei-cpu",
-    "RAGFLOW_IMAGE": "infiniflow/ragflow:v0.27.1",
+    "RAGFLOW_IMAGE": os.environ.get("RAGFLOW_IMAGE", "infiniflow/ragflow:v0.27.2"),
     "TEI_MODEL": "BAAI/bge-small-en-v1.5",
     "LLM_TIMEOUT_SECONDS": "360",
     "ALLOW_ANY_HOST": "0",
@@ -94,7 +95,7 @@ values = {
     "JAEGER_UI_PORT": "127.0.0.1:16686",
     "TEI_PORT": "127.0.0.1:6380",
 }
-for key in ("ELASTIC_PASSWORD", "OPENSEARCH_PASSWORD", "SERENEDB_PASSWORD", "OCEANBASE_PASSWORD", "SEEKDB_PASSWORD", "MYSQL_PASSWORD", "MYSQL_ROOT_PASSWORD", "MINIO_PASSWORD", "MINIO_ROOT_PASSWORD", "REDIS_PASSWORD", "CLICKHOUSE_PASSWORD"):
+for key in ("ELASTIC_PASSWORD", "OPENSEARCH_PASSWORD", "SERENEDB_PASSWORD", "OCEANBASE_PASSWORD", "SEEKDB_PASSWORD", "MYSQL_ROOT_PASSWORD", "MINIO_PASSWORD", "MINIO_ROOT_PASSWORD", "REDIS_PASSWORD", "CLICKHOUSE_PASSWORD"):
     values[key] = secrets.token_hex(24)
 # Do not carry any credential-looking defaults from a future upstream .env.
 for line in lines:
@@ -103,6 +104,8 @@ for line in lines:
     key, raw_value = line.split("=", 1)
     if raw_value.strip() and any(marker in key.upper() for marker in ("PASSWORD", "SECRET", "TOKEN", "API_KEY")):
         values[key] = secrets.token_hex(24)
+# RAGFlow connects as MySQL root by default, so both variables must match.
+values["MYSQL_PASSWORD"] = values["MYSQL_ROOT_PASSWORD"]
 seen = set()
 out = ["# Generated runtime values; this file is ignored by the PoC repository."]
 for line in lines:
@@ -119,7 +122,8 @@ path.write_text("\n".join(out) + "\n", encoding="utf-8")
 PY
   fi
   # Keep older generated runtime files aligned with the local TEI defaults.
-  python3 - "$ENV_FILE" <<'PY'
+  RAGFLOW_IMAGE="$IMAGE" python3 - "$ENV_FILE" <<'PY'
+import os
 import sys
 from pathlib import Path
 
@@ -128,6 +132,7 @@ wanted = {
     "COMPOSE_PROFILES": "elasticsearch,cpu,metadata-mysql,tei-cpu",
     "TEI_MODEL": "BAAI/bge-small-en-v1.5",
     "LLM_TIMEOUT_SECONDS": "360",
+    "RAGFLOW_IMAGE": os.environ.get("RAGFLOW_IMAGE", "infiniflow/ragflow:v0.27.2"),
 }
 lines = path.read_text(encoding="utf-8").splitlines()
 out = []
@@ -188,7 +193,11 @@ verify() {
   stage
   need docker
   [ "$(git -C "$SOURCE_DIR" rev-parse HEAD)" = "$COMMIT" ] || fail "wrong upstream commit"
-  grep -Eq '^RAGFLOW_IMAGE=infiniflow/ragflow:v0\.27\.1$' "$ENV_FILE" || fail "runtime image tag is wrong"
+  grep -Fqx "RAGFLOW_IMAGE=$IMAGE" "$ENV_FILE" || fail "runtime image tag is wrong"
+  local mysql_password mysql_root_password
+  mysql_password=$(grep -E '^MYSQL_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)
+  mysql_root_password=$(grep -E '^MYSQL_ROOT_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)
+  [ -n "$mysql_password" ] && [ "$mysql_password" = "$mysql_root_password" ] || fail "MYSQL_PASSWORD must match MYSQL_ROOT_PASSWORD for the root MySQL connection"
   verified_config >/dev/null
   printf 'verified official RAGFlow docker directory at %s\n' "$COMMIT"
 }

@@ -28,7 +28,7 @@ RUN_LIVE_RAGFLOW_TESTS=true python -m pytest -q -rs tests/test_live_ragflow.py
 python -m deval_ragflow ask "Welche zentralen Ergebnisse nennt die Studie?" --timeout 360
 ```
 
-Live runs create real datasets/documents and consume local/provider resources. Use a disposable API account/dataset and reset it only with the CLI's exact confirmation. Live success does not prove exactly-once recovery after a process crash or GraphRAG provider availability across upgrades. The `ask` smoke command also depends on the configured local chat provider and may be slow on CPU.
+Live runs create real datasets/documents and consume local/provider resources. Use a disposable API account/dataset and reset it only with the CLI's exact confirmation. Live success does not prove exactly-once recovery after a process crash or GraphRAG provider availability across upgrades. The `ask` smoke command also depends on the configured external RAGFlow chat provider and network access.
 
 ## Optional Docker validation
 

@@ -463,6 +463,56 @@ class Registry:
             )
             self._connection.commit()
 
+    def delete_mapping(
+        self, dataset_scope: str, version_uid: str
+    ) -> MappingRecord | None:
+        """Delete one collection mapping while retaining shared local provenance."""
+        with self._lock:
+            try:
+                self._transaction()
+                row = self._connection.execute(
+                    "SELECT * FROM ragflow_documents WHERE dataset_scope=? AND version_uid=?",
+                    (dataset_scope, version_uid),
+                ).fetchone()
+                if row is None:
+                    self._connection.commit()
+                    return None
+                mapping = self._mapping(row)
+                version = self._connection.execute(
+                    "SELECT document_uid FROM document_versions WHERE version_uid=?",
+                    (version_uid,),
+                ).fetchone()
+                self._connection.execute(
+                    "DELETE FROM ragflow_documents WHERE dataset_scope=? AND version_uid=?",
+                    (dataset_scope, version_uid),
+                )
+                still_mapped = self._connection.execute(
+                    "SELECT 1 FROM ragflow_documents WHERE version_uid=? LIMIT 1",
+                    (version_uid,),
+                ).fetchone()
+                if still_mapped is None:
+                    self._connection.execute(
+                        "DELETE FROM document_versions WHERE version_uid=?",
+                        (version_uid,),
+                    )
+                    if version is not None:
+                        still_versioned = self._connection.execute(
+                            "SELECT 1 FROM document_versions WHERE document_uid=? LIMIT 1",
+                            (version["document_uid"],),
+                        ).fetchone()
+                        if still_versioned is None:
+                            self._connection.execute(
+                                "DELETE FROM documents WHERE document_uid=?",
+                                (version["document_uid"],),
+                            )
+                self._connection.commit()
+                return mapping
+            except Exception as exc:
+                self._connection.rollback()
+                if isinstance(exc, RegistryError):
+                    raise
+                raise RegistryError(f"could not delete remote mapping: {exc}")
+
     def mappings_for_dataset(self, dataset_scope: str) -> list[MappingRecord]:
         with self._lock:
             rows = self._connection.execute(

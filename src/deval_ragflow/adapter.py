@@ -1,4 +1,4 @@
-"""The only network boundary: a small async HTTP adapter for RAGFlow v0.27.1."""
+"""The only network boundary: a small async HTTP adapter for RAGFlow v0.27.2."""
 
 from __future__ import annotations
 
@@ -40,11 +40,17 @@ def normalize_run_state(value: Any) -> str:
     if isinstance(value, int):
         return NUMERIC_STATES.get(value, "UNKNOWN")
     if isinstance(value, float) and value.is_integer():
-        return NUMERIC_STATES.get(int(value), "UNKNOWN")
+        try:
+            return NUMERIC_STATES.get(int(value), "UNKNOWN")
+        except (OverflowError, ValueError):
+            return "UNKNOWN"
     if isinstance(value, str):
         text = value.strip().upper()
         if text.isdigit():
-            return NUMERIC_STATES.get(int(text), "UNKNOWN")
+            try:
+                return NUMERIC_STATES.get(int(text), "UNKNOWN")
+            except ValueError:
+                return "UNKNOWN"
         if text in ("CANCELED", "CANCELLED"):
             return "CANCEL"
         return text if text in KNOWN_STATES else "UNKNOWN"
@@ -137,11 +143,13 @@ class RAGFlowAdapter:
         if client is not None:
             self._client = client
             if api_key:
-                self._client.headers["Authorization"] = "Bearer " + api_key
+                self._client.headers.update(
+                    {"Authorization": "Bearer " + api_key}
+                )
         else:
             headers = {"Accept": "application/json"}
             if api_key:
-                headers["Authorization"] = "Bearer " + api_key
+                headers.update({"Authorization": "Bearer " + api_key})
             self._client = httpx.AsyncClient(
                 timeout=timeout, headers=headers, transport=transport
             )
@@ -213,6 +221,74 @@ class RAGFlowAdapter:
                 code, str(payload.get("message", "unknown business error")), payload
             )
         return payload
+
+    async def _binary_request(
+        self,
+        path: str,
+        *,
+        label: str,
+        content_type_prefix: str,
+        timeout: float | None = None,
+    ) -> tuple[bytes, str]:
+        try:
+            response = await self._client.request(
+                "GET",
+                self._url(path),
+                timeout=self.timeout if timeout is None else timeout,
+            )
+        except Exception as exc:
+            if isinstance(exc, AdapterError):
+                raise
+            raise AdapterError(
+                f"RAGFlow {label} request failed: {type(exc).__name__}: {exc}"
+            ) from exc
+        if response.status_code >= 400:
+            try:
+                payload = response.json()
+            except (ValueError, json.JSONDecodeError):
+                payload = {}
+            message = (
+                payload.get("message", f"{label} unavailable")
+                if isinstance(payload, dict)
+                else f"{label} unavailable"
+            )
+            raise RAGFlowHTTPError(response.status_code, str(message), payload)
+        content_type = (
+            response.headers.get("content-type", "application/octet-stream")
+            .split(";", 1)[0]
+            .strip()
+        )
+        if not content_type.startswith(content_type_prefix):
+            raise AdapterError(f"RAGFlow {label} response is not a file")
+        return response.content, content_type
+
+    async def get_document_image(
+        self, image_id: str, *, timeout: float | None = None
+    ) -> tuple[bytes, str]:
+        """Fetch a RAGFlow source screenshot/blob without parsing it as JSON."""
+        image_id = str(image_id).strip()
+        if not image_id:
+            raise AdapterError("RAGFlow image id must not be empty")
+        content, content_type = await self._binary_request(
+            f"/documents/images/{self._segment(image_id)}",
+            label="source image",
+            content_type_prefix="image/",
+            timeout=timeout,
+        )
+        return content, content_type
+
+    async def download_document(
+        self, dataset_id: str, document_id: str, *, timeout: float | None = None
+    ) -> tuple[bytes, str]:
+        """Download the original file stored for a RAGFlow document."""
+        if not str(dataset_id).strip() or not str(document_id).strip():
+            raise AdapterError("RAGFlow dataset and document ids must not be empty")
+        return await self._binary_request(
+            f"/datasets/{self._segment(dataset_id)}/documents/{self._segment(document_id)}",
+            label="document",
+            content_type_prefix="application/",
+            timeout=timeout,
+        )
 
     async def healthz(self) -> dict[str, Any]:
         # healthz is documented as an HTTP readiness endpoint; accept a successful
@@ -416,10 +492,52 @@ class RAGFlowAdapter:
         question: str,
         session_id: str,
         *,
+        messages: Sequence[Mapping[str, str]] | None = None,
+        stateless: bool = False,
         timeout: float | None = None,
     ) -> dict[str, Any]:
         if not question.strip():
             raise AdapterError("question must not be empty")
+        request_timeout = max(360.0, self.timeout) if timeout is None else timeout
+        if stateless:
+            request_messages = [dict(message) for message in (messages or ())]
+            if not request_messages:
+                request_messages = [{"role": "user", "content": question}]
+            openai_payload = await self._request(
+                "POST",
+                f"/openai/{self._segment(chat_id)}/chat/completions",
+                json_body={
+                    "model": "model",
+                    "stream": False,
+                    "messages": request_messages,
+                    "extra_body": {"reference": True},
+                },
+                timeout=request_timeout,
+                require_code=False,
+            )
+            choices = openai_payload.get("choices")
+            first_choice = choices[0] if isinstance(choices, list) and choices else None
+            message = (
+                first_choice.get("message")
+                if isinstance(first_choice, dict)
+                else None
+            )
+            answer = message.get("content") if isinstance(message, dict) else None
+            if not isinstance(answer, str) or not answer.strip():
+                raise AdapterError("RAGFlow stateless completion returned no answer")
+            if answer.startswith("**ERROR**"):
+                raise AdapterError(answer)
+            return {
+                "code": 0,
+                "data": {
+                    "answer": answer,
+                    "reference": message.get("reference", {})
+                    if isinstance(message, dict)
+                    else {},
+                },
+                "raw": openai_payload,
+            }
+
         payload = await self._request(
             "POST",
             "/chat/completions",
@@ -430,7 +548,7 @@ class RAGFlowAdapter:
                 "stream": False,
                 "quote": True,
             },
-            timeout=max(360.0, self.timeout) if timeout is None else timeout,
+            timeout=request_timeout,
         )
         data = _data(payload)
         if not isinstance(data, dict):
@@ -517,7 +635,7 @@ class RAGFlowAdapter:
         }
         if embedding_model:
             body["embedding_model"] = embedding_model
-        # v0.27.1 has no documented create-dataset llm field. Keep it out of
+        # v0.27.2 has no documented create-dataset llm field. Keep it out of
         # the request; the model is checked by doctor/GraphRAG setup.
         payload = await self._request("POST", "/datasets", json_body=body)
         data = _data(payload)
@@ -607,7 +725,7 @@ class RAGFlowAdapter:
     async def find_document(
         self, dataset_id: str, remote_name: str, version_uid: str, max_pages: int = 20
     ) -> dict[str, Any] | None:
-        # v0.27.1 returns a business error when a name filter matches no
+        # v0.27.2 returns a business error when a name filter matches no
         # document. List bounded pages and match locally so a first ingestion
         # can correctly proceed to upload.
         docs = await self.list_documents(dataset_id, max_pages=max_pages)
@@ -685,6 +803,16 @@ class RAGFlowAdapter:
         )
         data = _data(payload)
         return data if isinstance(data, dict) else {"raw": payload}
+
+    async def delete_document(
+        self, dataset_id: str, document_id: str
+    ) -> dict[str, Any]:
+        """Remove one document from a dataset (RAGFlow v0.27.2)."""
+        return await self._request(
+            "DELETE",
+            f"/datasets/{self._segment(dataset_id)}/documents",
+            json_body={"ids": [document_id]},
+        )
 
     async def start_parse(
         self, dataset_id: str, document_ids: Sequence[str]
@@ -778,7 +906,9 @@ class RAGFlowAdapter:
 
     async def start_graph(self, dataset_id: str) -> tuple[str, dict[str, Any]]:
         payload = await self._request(
-            "POST", f"/datasets/{self._segment(dataset_id)}/run_graphrag"
+            "POST",
+            f"/datasets/{self._segment(dataset_id)}/index",
+            params={"type": "graph"},
         )
         data = _data(payload)
         task_id = data.get("graphrag_task_id") if isinstance(data, dict) else None
@@ -790,7 +920,9 @@ class RAGFlowAdapter:
 
     async def graph_status(self, dataset_id: str) -> GraphStatus:
         payload = await self._request(
-            "GET", f"/datasets/{self._segment(dataset_id)}/trace_graphrag"
+            "GET",
+            f"/datasets/{self._segment(dataset_id)}/index",
+            params={"type": "graph"},
         )
         data = _data(payload)
         raw = data if isinstance(data, dict) else {}
@@ -847,7 +979,7 @@ class RAGFlowAdapter:
 
     async def get_graph(self, dataset_id: str) -> dict[str, Any]:
         payload = await self._request(
-            "GET", f"/datasets/{self._segment(dataset_id)}/knowledge_graph"
+            "GET", f"/datasets/{self._segment(dataset_id)}/graph"
         )
         data = _data(payload)
         return data if isinstance(data, dict) else {"raw": payload}

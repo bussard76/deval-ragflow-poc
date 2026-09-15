@@ -15,7 +15,7 @@ from dataclasses import dataclass, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
 
 from .adapter import RAGFlowAdapter
 from .citations import CitationResolver
@@ -45,6 +45,7 @@ class UploadJob:
     job_id: str
     collection_scope: str
     filenames: list[str]
+    operation: str = "upload"
     state: str = "processing"
     completed: int = 0
     error: str = ""
@@ -146,9 +147,32 @@ def _completion_reference_chunks(completion: dict[str, Any]) -> list[dict[str, A
     if not isinstance(reference, dict):
         return []
     chunks = reference.get("chunks")
+    if isinstance(chunks, dict):
+        chunks = list(chunks.values())
     if not isinstance(chunks, list):
         return []
     return [chunk for chunk in chunks if isinstance(chunk, dict)]
+
+
+def _normalize_chat_messages(value: Any, question: str) -> list[dict[str, str]]:
+    if value in (None, []):
+        return [{"role": "user", "content": question}]
+    if not isinstance(value, list):
+        raise WebError(400, "messages must be an array")
+    messages: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise WebError(400, "messages must contain objects")
+        role = item.get("role")
+        content = item.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str):
+            raise WebError(400, "messages must contain user/assistant text messages")
+        messages.append({"role": role, "content": content})
+    if not messages or messages[-1]["role"] != "user":
+        messages.append({"role": "user", "content": question})
+    else:
+        messages[-1]["content"] = question
+    return messages
 
 
 class WebApplication:
@@ -268,25 +292,64 @@ class WebApplication:
             ),
         )
 
-    def _collection_status(self, scope: str) -> str:
+    def _graph_view(
+        self, scope: str, mappings: list[Any] | None = None
+    ) -> dict[str, Any]:
+        if mappings is None:
+            mappings = self.registry.mappings_for_dataset(scope)
+        graph = self.registry.get_index(scope, "graph") or {}
+        remote_state = str(graph.get("state", "UNKNOWN")).upper()
         with self._lock:
             job = self._jobs.get(scope)
-            if job is not None:
-                if job.state in {"processing", "building"}:
-                    return "processing" if job.state == "processing" else "building"
-                if job.state == "error":
-                    return "error"
-        mappings = self.registry.mappings_for_dataset(scope)
-        graph = self.registry.get_index(scope, "graph")
-        if graph is not None and graph.get("state") == "DONE":
-            return "ready"
-        if not mappings:
-            return "idle"
-        if graph is not None and graph.get("state") in {
-            "UNSTART",
-            "RUNNING",
-            "SCHEDULE",
+            job_state = job.state if job is not None else ""
+            job_error = job.error if job is not None else ""
+
+        remote_update = remote_state in {"UNSTART", "RUNNING", "SCHEDULE"}
+        unknown_task = remote_state == "UNKNOWN" and bool(graph.get("remote_task_id"))
+        if job_state in {"processing", "building"} or remote_update or unknown_task:
+            state = "updating"
+        elif job_state == "error" or remote_state in {
+            "FAIL",
+            "CANCEL",
+            "CANCELED",
+            "NOT_CONFIGURED",
         }:
+            state = "error"
+        elif not mappings:
+            state = "empty"
+        elif remote_state == "EMPTY":
+            state = "error"
+        elif remote_state == "DONE" and all(
+            mapping.state == "DONE" for mapping in mappings
+        ):
+            state = "current"
+        else:
+            state = "outdated"
+
+        return {
+            "state": state,
+            "remote_state": remote_state,
+            "progress": graph.get("progress"),
+            "message": str(job_error or graph.get("progress_msg") or ""),
+            "document_count": len(mappings),
+        }
+
+    def _collection_status(
+        self, scope: str, graph_view: dict[str, Any] | None = None
+    ) -> str:
+        with self._lock:
+            job = self._jobs.get(scope)
+            job_state = job.state if job is not None else ""
+        graph_state = (graph_view or self._graph_view(scope))["state"]
+        if graph_state == "current":
+            return "ready"
+        if graph_state == "empty":
+            return "idle"
+        if graph_state == "error":
+            return "error"
+        if graph_state == "updating":
+            return "processing" if job_state == "processing" else "building"
+        if graph_state == "outdated":
             return "building"
         return "processing"
 
@@ -294,13 +357,23 @@ class WebApplication:
         dataset = self.registry.get_dataset(scope)
         if dataset is None:
             raise WebError(404, "collection not found")
+        mappings = self.registry.mappings_for_dataset(scope)
         documents: list[str] = []
-        for mapping in self.registry.mappings_for_dataset(scope):
+        document_records: list[dict[str, Any]] = []
+        for mapping in mappings:
             extraction = self.registry.get_extraction(mapping.version_uid)
-            documents.append(
+            name = (
                 extraction.source_basename
                 if extraction is not None
                 else mapping.remote_name
+            )
+            documents.append(name)
+            document_records.append(
+                {
+                    "id": mapping.version_uid,
+                    "name": name,
+                    "state": mapping.state,
+                }
             )
         with self._lock:
             job = self._jobs.get(scope)
@@ -308,6 +381,7 @@ class WebApplication:
                 {
                     "id": job.job_id,
                     "files": job.filenames,
+                    "operation": job.operation,
                     "completed": job.completed,
                     "total": len(job.filenames),
                     "error": job.error,
@@ -315,11 +389,14 @@ class WebApplication:
                 if job is not None
                 else None
             )
+        graph_view = self._graph_view(scope, mappings)
         return {
             "id": dataset.dataset_scope,
             "name": dataset.name,
-            "status": self._collection_status(scope),
+            "status": self._collection_status(scope, graph_view),
             "documents": documents,
+            "document_records": document_records,
+            "graph": graph_view,
             "job": job_view,
         }
 
@@ -394,6 +471,109 @@ class WebApplication:
         self._executor.submit(self._process_upload, job, temp_dir, paths)
         return self._collection_view(scope)
 
+    def start_delete(self, scope: str, version_uid: str) -> dict[str, Any]:
+        if self.registry.get_dataset(scope) is None:
+            raise WebError(404, "collection not found")
+        with self._lock:
+            current = self._jobs.get(scope)
+            if current is not None and current.state in {"processing", "building"}:
+                raise WebError(409, "collection is already being updated")
+        if self._graph_view(scope)["state"] == "updating":
+            raise WebError(409, "collection is already being updated")
+        mapping = self.registry.get_mapping(scope, version_uid)
+        if mapping is None:
+            raise WebError(404, "document not found in collection")
+        if mapping.state != "DONE":
+            raise WebError(409, "document is still being processed")
+        extraction = self.registry.get_extraction(mapping.version_uid)
+        filename = (
+            extraction.source_basename
+            if extraction is not None
+            else mapping.remote_name
+        )
+        job = UploadJob(
+            job_id=uuid.uuid4().hex,
+            collection_scope=scope,
+            filenames=[filename],
+            operation="delete",
+            state="building",
+        )
+        with self._lock:
+            self._jobs[scope] = job
+        self._executor.submit(self._process_delete, job, version_uid)
+        return self._collection_view(scope)
+
+    def _process_delete(self, job: UploadJob, version_uid: str) -> None:
+        config = self._collection_config(job.collection_scope)
+
+        async def run():
+            adapter = RAGFlowAdapter(
+                config.base_url, config.api_key, timeout=config.request_timeout
+            )
+            try:
+                dataset = self.registry.get_dataset(job.collection_scope)
+                mapping = self.registry.get_mapping(job.collection_scope, version_uid)
+                if dataset is None or mapping is None:
+                    raise DevalError("document mapping disappeared before deletion")
+                if mapping.remote_document_id:
+                    await adapter.delete_document(
+                        dataset.remote_dataset_id, mapping.remote_document_id
+                    )
+                if (
+                    self.registry.delete_mapping(job.collection_scope, version_uid)
+                    is None
+                ):
+                    raise DevalError("document mapping disappeared during deletion")
+                remaining = self.registry.mappings_for_dataset(job.collection_scope)
+                if not remaining:
+                    self.registry.upsert_index(
+                        job.collection_scope,
+                        "graph",
+                        state="EMPTY",
+                        progress=1.0,
+                        progress_msg="no documents in collection",
+                    )
+                else:
+                    self.registry.upsert_index(
+                        job.collection_scope,
+                        "graph",
+                        state="UNSTART",
+                        progress=0.0,
+                        progress_msg="document removed; graph rebuild accepted",
+                    )
+                    graph = await IngestionService(
+                        config, self.registry, adapter
+                    ).build_graph(timeout=config.graph_timeout)
+                    if graph.get("state") == "EMPTY":
+                        # A completed run may legitimately contain no KG entities;
+                        # vector retrieval and chat still work with the parsed docs.
+                        self.registry.upsert_index(
+                            job.collection_scope,
+                            "graph",
+                            state="DONE",
+                            progress=1.0,
+                            progress_msg=graph.get(
+                                "message", "graph has no knowledge-graph entities"
+                            ),
+                        )
+                    elif graph.get("state") != "DONE":
+                        raise DevalError(
+                            "GraphRAG rebuild did not finish successfully: "
+                            f"{graph.get('message', graph.get('state', 'unknown'))}"
+                        )
+                with self._lock:
+                    job.completed = 1
+                    job.state = "ready"
+            finally:
+                await adapter.aclose()
+
+        try:
+            asyncio.run(run())
+        except Exception as exc:  # noqa: BLE001 - surfaced by the status endpoint
+            with self._lock:
+                job.state = "error"
+                job.error = str(exc)
+
     def _process_upload(
         self, job: UploadJob, temp_dir: Path, paths: list[Path]
     ) -> None:
@@ -427,7 +607,19 @@ class WebApplication:
                 with self._lock:
                     job.state = "building"
                 graph = await service.build_graph(timeout=config.graph_timeout)
-                if graph.get("state") != "DONE":
+                if graph.get("state") == "EMPTY":
+                    # RAGFlow can finish successfully without extracted KG
+                    # entities; vector retrieval still works for the documents.
+                    self.registry.upsert_index(
+                        job.collection_scope,
+                        "graph",
+                        state="DONE",
+                        progress=1.0,
+                        progress_msg=graph.get(
+                            "message", "graph has no knowledge-graph entities"
+                        ),
+                    )
+                elif graph.get("state") != "DONE":
                     raise DevalError(
                         f"GraphRAG build did not finish successfully: {graph.get('message', graph.get('state', 'unknown'))}"
                     )
@@ -480,6 +672,7 @@ class WebApplication:
                 "collection_id": job.collection_scope,
                 "state": job.state,
                 "files": job.filenames,
+                "operation": job.operation,
                 "completed": job.completed,
                 "total": len(job.filenames),
                 "error": job.error,
@@ -488,15 +681,81 @@ class WebApplication:
     def graph_status(self, scope: str) -> dict[str, Any]:
         if self.registry.get_dataset(scope) is None:
             raise WebError(404, "collection not found")
-        index = self.registry.get_index(scope, "graph") or {}
-        state = str(index.get("state", "UNKNOWN"))
+        view = self._graph_view(scope)
         return {
             "collection_id": scope,
-            "ready": state == "DONE",
-            "state": state,
-            "progress": index.get("progress"),
-            "message": index.get("progress_msg", ""),
+            "ready": view["state"] == "current",
+            "state": view["remote_state"],
+            "freshness": view["state"],
+            "progress": view["progress"],
+            "message": view["message"],
+            "document_count": view["document_count"],
         }
+
+    def source_image(self, scope: str, image_id: str) -> tuple[bytes, str]:
+        dataset = self.registry.get_dataset(scope)
+        if dataset is None:
+            raise WebError(404, "collection not found")
+        image_id = image_id.strip()
+        if not re.fullmatch(
+            rf"{re.escape(dataset.remote_dataset_id)}-[A-Za-z0-9_-]+", image_id
+        ):
+            raise WebError(404, "source image not found")
+        config = self._collection_config(dataset.name)
+
+        async def run() -> tuple[bytes, str]:
+            adapter = RAGFlowAdapter(
+                config.base_url, config.api_key, timeout=config.request_timeout
+            )
+            try:
+                return await adapter.get_document_image(image_id)
+            finally:
+                await adapter.aclose()
+
+        try:
+            return asyncio.run(run())
+        except WebError:
+            raise
+        except Exception as exc:
+            raise WebError(502, f"RAGFlow source image failed: {exc}") from exc
+
+    def source_document(self, scope: str, version_uid: str) -> tuple[bytes, str, str]:
+        dataset = self.registry.get_dataset(scope)
+        if dataset is None:
+            raise WebError(404, "collection not found")
+        version_uid = version_uid.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", version_uid):
+            raise WebError(404, "document not found")
+        mapping = self.registry.get_mapping(scope, version_uid)
+        remote_document_id = mapping.remote_document_id if mapping else None
+        if mapping is None or not remote_document_id:
+            raise WebError(404, "document not found")
+        extraction = self.registry.get_extraction(version_uid)
+        filename = (
+            extraction.source_basename
+            if extraction is not None
+            else mapping.remote_name
+        ) or "document.pdf"
+        config = self._collection_config(dataset.name)
+
+        async def run() -> tuple[bytes, str]:
+            adapter = RAGFlowAdapter(
+                config.base_url, config.api_key, timeout=config.request_timeout
+            )
+            try:
+                return await adapter.download_document(
+                    dataset.remote_dataset_id, remote_document_id
+                )
+            finally:
+                await adapter.aclose()
+
+        try:
+            content, content_type = asyncio.run(run())
+            return content, content_type, filename
+        except WebError:
+            raise
+        except Exception as exc:
+            raise WebError(502, f"RAGFlow document download failed: {exc}") from exc
 
     async def _ensure_chat_session(
         self,
@@ -505,8 +764,13 @@ class WebApplication:
         model: ModelOption,
         conversation_id: str,
     ) -> ChatHandle:
+        cache_key = conversation_id
+        chat_name = f"deval-web-{conversation_id}"
+        if self.config.stateless_chat:
+            cache_key = f"stateless:{dataset.dataset_scope}:{model.id}"
+            chat_name = f"deval-web-stateless-{uuid.uuid5(uuid.NAMESPACE_URL, cache_key)}"
         with self._lock:
-            handle = self._chats.get(conversation_id)
+            handle = self._chats.get(cache_key)
             if handle is not None:
                 if (
                     handle.collection_scope != dataset.dataset_scope
@@ -517,20 +781,22 @@ class WebApplication:
                     )
                 return handle
         chat = await adapter.ensure_chat(
-            f"deval-web-{conversation_id}",
+            chat_name,
             [dataset.remote_dataset_id],
             llm_model=model.ragflow_model,
         )
         chat_id = str(chat.get("id", ""))
         if not chat_id:
             raise DevalError("RAGFlow chat has no id")
-        session = await adapter.create_chat_session(chat_id, name="DEval Webchat")
-        session_id = str(session.get("id", ""))
-        if not session_id:
-            raise DevalError("RAGFlow chat session has no id")
+        session_id = ""
+        if not self.config.stateless_chat:
+            session = await adapter.create_chat_session(chat_id, name="DEval Webchat")
+            session_id = str(session.get("id", ""))
+            if not session_id:
+                raise DevalError("RAGFlow chat session has no id")
         handle = ChatHandle(dataset.dataset_scope, model.id, chat_id, session_id)
         with self._lock:
-            self._chats[conversation_id] = handle
+            self._chats[cache_key] = handle
         return handle
 
     async def _retrieve_citations(
@@ -580,10 +846,13 @@ class WebApplication:
                 retrieved, citations = await self._retrieve_citations(
                     adapter, config, dataset, scope, question
                 )
+                references = retrieved.references or retrieved.chunks
                 return {
                     "question": question,
-                    "results": retrieved.references or retrieved.chunks,
-                    "citations": [self._citation_view(item) for item in citations],
+                    "results": references,
+                    "citations": self._citation_views(
+                        citations, references, scope, dataset.remote_dataset_id
+                    ),
                 }
             finally:
                 await adapter.aclose()
@@ -604,6 +873,12 @@ class WebApplication:
             raise WebError(409, "GraphRAG is not ready for this collection")
         model = self._model(model_id)
         conversation_id = self._conversation_id(conversation_id)
+        if self.config.stateless_chat:
+            return {
+                "conversation_id": conversation_id,
+                "collection_id": scope,
+                "model": model.public_dict(),
+            }
         config = self._collection_config(dataset.name)
 
         async def run():
@@ -629,15 +904,36 @@ class WebApplication:
         except Exception as exc:
             raise WebError(502, f"RAGFlow chat setup failed: {exc}") from exc
 
-    def _citation_view(self, citation: Any) -> dict[str, Any]:
+    @staticmethod
+    def _reference_image_id(reference: Any, remote_dataset_id: str) -> str | None:
+        if not isinstance(reference, dict) or not remote_dataset_id.strip():
+            return None
+        value = reference.get("image_id", reference.get("img_id"))
+        if not isinstance(value, str):
+            return None
+        image_id = value.strip()
+        if not image_id.startswith(remote_dataset_id.strip() + "-"):
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,512}", image_id):
+            return None
+        return image_id
+
+    def _citation_view(
+        self,
+        citation: Any,
+        *,
+        collection_scope: str = "",
+        remote_dataset_id: str = "",
+        reference: Any = None,
+    ) -> dict[str, Any]:
         extraction = (
             self.registry.get_extraction(citation.version_uid)
             if citation.version_uid
             else None
         )
         excerpt = citation.matched_text
-        if not excerpt and citation.version_uid and citation.passage_uid:
-            excerpt = next(
+        if citation.version_uid and citation.passage_uid:
+            local_excerpt = next(
                 (
                     str(item.get("text", ""))
                     for item in self.registry.list_passages(citation.version_uid)
@@ -645,15 +941,52 @@ class WebApplication:
                 ),
                 "",
             )
-        return {
+            if local_excerpt:
+                excerpt = local_excerpt
+        source = citation.as_dict()
+        image_id = self._reference_image_id(reference, remote_dataset_id)
+        if image_id:
+            source["image_id"] = image_id
+            if isinstance(reference, dict) and reference.get("positions") is not None:
+                source["positions"] = reference["positions"]
+        view: dict[str, Any] = {
             "document": extraction.source_basename
             if extraction
             else "Unaufgelöste Quelle",
             "page": citation.page_number,
             "excerpt": excerpt,
             "resolved": citation.passage_uid is not None,
-            "source": citation.as_dict(),
+            "source": source,
         }
+        if collection_scope and citation.version_uid:
+            view["document_url"] = (
+                f"/api/collections/{quote(collection_scope, safe='')}/documents/"
+                f"{quote(citation.version_uid, safe='')}/file"
+            )
+        if image_id and collection_scope:
+            view["image_id"] = image_id
+            view["image_url"] = (
+                f"/api/collections/{quote(collection_scope, safe='')}/source-images/"
+                f"{quote(image_id, safe='')}"
+            )
+        return view
+
+    def _citation_views(
+        self,
+        citations: list[Any],
+        references: list[Any],
+        collection_scope: str,
+        remote_dataset_id: str,
+    ) -> list[dict[str, Any]]:
+        return [
+            self._citation_view(
+                citation,
+                collection_scope=collection_scope,
+                remote_dataset_id=remote_dataset_id,
+                reference=references[index] if index < len(references) else None,
+            )
+            for index, citation in enumerate(citations)
+        ]
 
     def answer(
         self,
@@ -661,6 +994,7 @@ class WebApplication:
         model_id: str,
         question: str,
         conversation_id: str,
+        messages: Any = None,
     ) -> dict[str, Any]:
         dataset = self.registry.get_dataset(collection_scope)
         if dataset is None:
@@ -673,6 +1007,7 @@ class WebApplication:
             raise WebError(400, "question must not be empty")
         if len(question) > MAX_QUESTION_LENGTH:
             raise WebError(400, "question is too long")
+        chat_messages = _normalize_chat_messages(messages, question)
         conversation_id = self._conversation_id(conversation_id)
         model = self._model(model_id)
         config = self._collection_config(dataset.name)
@@ -686,13 +1021,17 @@ class WebApplication:
                     adapter, dataset, model, conversation_id
                 )
                 completion = await adapter.chat_completion(
-                    handle.chat_id, question, handle.session_id
+                    handle.chat_id,
+                    question,
+                    handle.session_id,
+                    messages=chat_messages,
+                    stateless=self.config.stateless_chat,
                 )
                 data = completion.get("data")
                 answer = data.get("answer") if isinstance(data, dict) else None
                 if not isinstance(answer, str) or not answer.strip():
                     raise DevalError("RAGFlow chat completion returned no answer")
-                _, fallback_citations = await self._retrieve_citations(
+                fallback_retrieved, fallback_citations = await self._retrieve_citations(
                     adapter, config, dataset, collection_scope, question
                 )
                 reference_chunks = _completion_reference_chunks(completion)
@@ -703,12 +1042,20 @@ class WebApplication:
                     if reference_chunks
                     else fallback_citations
                 )
+                references = reference_chunks or (
+                    fallback_retrieved.references or fallback_retrieved.chunks
+                )
                 return {
                     "answer": answer.strip(),
                     "conversation_id": conversation_id,
                     "collection_id": collection_scope,
                     "model": model.public_dict(),
-                    "citations": [self._citation_view(item) for item in citations],
+                    "citations": self._citation_views(
+                        citations,
+                        references,
+                        collection_scope,
+                        dataset.remote_dataset_id,
+                    ),
                 }
             finally:
                 await adapter.aclose()
@@ -734,7 +1081,24 @@ class WebHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_binary(
+        self,
+        status: int,
+        body: bytes,
+        content_type: str,
+        content_disposition: str | None = None,
+    ) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "private, max-age=300")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if content_disposition:
+            self.send_header("Content-Disposition", content_disposition)
         self.end_headers()
         self.wfile.write(body)
 
@@ -769,6 +1133,30 @@ class WebHandler(BaseHTTPRequestHandler):
             elif path.startswith("/api/jobs/"):
                 job_id = unquote(path.removeprefix("/api/jobs/")).strip()
                 self._send(200, self.application.job_status(job_id))
+            elif path.startswith("/api/collections/") and "/source-images/" in path:
+                prefix = "/api/collections/"
+                scope, image_id = path[len(prefix) :].split("/source-images/", 1)
+                body, content_type = self.application.source_image(
+                    unquote(scope).strip("/"), unquote(image_id).strip("/")
+                )
+                self._send_binary(200, body, content_type)
+            elif (
+                path.startswith("/api/collections/")
+                and "/documents/" in path
+                and path.endswith("/file")
+            ):
+                prefix = "/api/collections/"
+                scope, document_path = path[len(prefix) :].rsplit("/documents/", 1)
+                version_uid = document_path[: -len("/file")]
+                body, content_type, filename = self.application.source_document(
+                    unquote(scope).strip("/"), unquote(version_uid).strip("/")
+                )
+                self._send_binary(
+                    200,
+                    body,
+                    content_type,
+                    f"inline; filename*=UTF-8''{quote(filename, safe='')}",
+                )
             elif path.startswith("/api/collections/") and path.endswith("/graph"):
                 prefix = "/api/collections/"
                 scope = unquote(path[len(prefix) : -len("/graph")]).strip("/")
@@ -782,6 +1170,24 @@ class WebHandler(BaseHTTPRequestHandler):
                 self._send(200, self.application._collection_view(scope))
             else:
                 raise WebError(404, "endpoint not found")
+        except Exception as exc:  # noqa: BLE001 - convert expected and unexpected errors
+            self._error(exc)
+
+    def do_DELETE(self) -> None:
+        try:
+            path = urlparse(self.path).path.rstrip("/") or "/"
+            marker = "/documents/"
+            prefix = "/api/collections/"
+            if path.startswith(prefix) and marker in path[len(prefix) :]:
+                scope, version_uid = path[len(prefix) :].rsplit(marker, 1)
+                self._send(
+                    202,
+                    self.application.start_delete(
+                        unquote(scope).strip("/"), unquote(version_uid).strip()
+                    ),
+                )
+                return
+            raise WebError(404, "endpoint not found")
         except Exception as exc:  # noqa: BLE001 - convert expected and unexpected errors
             self._error(exc)
 
@@ -841,6 +1247,7 @@ class WebHandler(BaseHTTPRequestHandler):
                         str(payload.get("model_id", "")),
                         str(payload.get("question", "")),
                         str(payload.get("conversation_id", "")),
+                        payload.get("messages"),
                     ),
                 )
                 return

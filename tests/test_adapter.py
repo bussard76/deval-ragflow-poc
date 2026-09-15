@@ -31,6 +31,111 @@ def test_state_and_message_normalization():
     assert normalize_progress_message(["one", 2]) == ("one", "2")
 
 
+def test_get_document_image_returns_authenticated_binary():
+    def handler(request):
+        assert request.method == "GET"
+        assert request.url.path == "/api/v1/documents/images/dataset-chunk"
+        return httpx.Response(
+            200,
+            content=b"jpeg-bytes",
+            headers={"content-type": "image/jpeg; charset=binary"},
+        )
+
+    async def exercise():
+        adapter = RAGFlowAdapter(
+            "http://localhost:9380",
+            "secret",
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            content, content_type = await adapter.get_document_image("dataset-chunk")
+            assert content == b"jpeg-bytes"
+            assert content_type == "image/jpeg"
+        finally:
+            await adapter.aclose()
+
+    run(exercise())
+
+
+def test_download_document_returns_pdf_bytes():
+    def handler(request):
+        assert request.method == "GET"
+        assert request.url.path == "/api/v1/datasets/dataset/documents/remote-doc"
+        return httpx.Response(
+            200,
+            content=b"%PDF-1.7",
+            headers={"content-type": "application/pdf"},
+        )
+
+    async def exercise():
+        adapter = RAGFlowAdapter(
+            transport=httpx.MockTransport(handler),
+        )
+        try:
+            content, content_type = await adapter.download_document(
+                "dataset", "remote-doc"
+            )
+            assert content == b"%PDF-1.7"
+            assert content_type == "application/pdf"
+        finally:
+            await adapter.aclose()
+
+    run(exercise())
+
+
+def test_stateless_chat_completion_uses_openai_compatible_endpoint():
+    def handler(request):
+        assert request.method == "POST"
+        assert request.url.path == "/api/v1/openai/chat/chat/completions"
+        body = json.loads(request.content)
+        assert body == {
+            "model": "model",
+            "stream": False,
+            "messages": [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "answer"},
+                {"role": "user", "content": "second"},
+            ],
+            "extra_body": {"reference": True},
+        }
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-chat",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "The answer.",
+                            "reference": {"chunks": [{"document_id": "doc"}]},
+                        }
+                    }
+                ],
+            },
+        )
+
+    async def exercise():
+        adapter = RAGFlowAdapter(transport=httpx.MockTransport(handler))
+        try:
+            completion = await adapter.chat_completion(
+                "chat",
+                "second",
+                "",
+                messages=[
+                    {"role": "user", "content": "first"},
+                    {"role": "assistant", "content": "answer"},
+                    {"role": "user", "content": "second"},
+                ],
+                stateless=True,
+            )
+            assert completion["data"]["answer"] == "The answer."
+            assert completion["data"]["reference"]["chunks"]
+        finally:
+            await adapter.aclose()
+
+    run(exercise())
+
+
 def test_adapter_routes_multipart_patch_status_retrieval_graph_and_delete():
     requests = []
     status_runs = iter(["RUNNING", "DONE"])
@@ -122,6 +227,9 @@ def test_adapter_routes_multipart_patch_status_retrieval_graph_and_delete():
             assert body["meta_fields"]["version_uid"] == "version"
             assert body["enabled"] == 1
             return httpx.Response(200, json={"code": 0, "data": {"id": "remote-doc"}})
+        if path.endswith("/documents") and request.method == "DELETE":
+            assert json.loads(request.content) == {"ids": ["remote-doc"]}
+            return httpx.Response(200, json={"code": 0})
         if path.endswith("/documents") and request.method == "GET":
             return httpx.Response(
                 200,
@@ -168,19 +276,21 @@ def test_adapter_routes_multipart_patch_status_retrieval_graph_and_delete():
                     },
                 },
             )
-        if path.endswith("/run_graphrag"):
-            return httpx.Response(
-                200, json={"code": 0, "data": {"graphrag_task_id": "task"}}
-            )
-        if path.endswith("/trace_graphrag"):
-            return httpx.Response(
-                200,
-                json={
-                    "code": 0,
-                    "data": {"id": "task", "progress": 1, "progress_msg": "done"},
-                },
-            )
-        if path.endswith("/knowledge_graph"):
+        if path == "/api/v1/datasets/dataset/index":
+            assert request.url.params["type"] == "graph"
+            if request.method == "POST":
+                return httpx.Response(
+                    200, json={"code": 0, "data": {"task_id": "task"}}
+                )
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "code": 0,
+                        "data": {"id": "task", "progress": 1, "progress_msg": "done"},
+                    },
+                )
+        if path == "/api/v1/datasets/dataset/graph":
             return httpx.Response(
                 200, json={"code": 0, "data": {"graph": {"nodes": [], "edges": []}}}
             )
@@ -228,6 +338,7 @@ def test_adapter_routes_multipart_patch_status_retrieval_graph_and_delete():
             assert second.state == "DONE"
             await adapter.start_parse("dataset", ["remote-doc"])
             await adapter.cancel_parse("dataset", ["remote-doc"])
+            await adapter.delete_document("dataset", "remote-doc")
             result = await adapter.retrieve(
                 "question",
                 ["dataset"],

@@ -5,7 +5,7 @@ Erster React/Vite-Oberflächen-Slice auf Basis des Figma-Exports in `Downloads/B
 ```bash
 cd frontend
 pnpm install
-pnpm dev
+DEVAL_API_URL=http://127.0.0.1:8790 pnpm dev --host 127.0.0.1
 ```
 
 Die Oberfläche spricht im Dev-Modus über Vite-Proxy mit der lokalen Web-API. Starte dafür in zwei Terminals:
@@ -19,4 +19,4 @@ cd frontend
 pnpm dev
 ```
 
-Der Happy Path ist verbunden: Sammlung anlegen, mehrere PDFs hochladen, Verarbeitung/GraphRAG-Status pollen, Modell wählen, chatten und deterministische Zitate anzeigen. Der Quellenbereich bleibt als Prototyp-Mock gekennzeichnet; PDF-Navigation und Hervorhebung folgen später.
+Die UI ist unter `http://127.0.0.1:5173` erreichbar. Der Happy Path ist verbunden: Sammlung anlegen, mehrere PDFs hochladen, Verarbeitung/GraphRAG-Status pollen, ein extern in RAGFlow konfiguriertes Modell wählen, chatten und deterministische Zitate anzeigen. Über `+` im Chatkopf lassen sich beliebig viele Chats je Sammlung anlegen und wechseln; Verlauf und Modellwahl werden je Chat ausschließlich im Browser gespeichert. Standardmäßig nutzt das Backend RAGFlows stateless OpenAI-kompatiblen Endpoint ohne RAGFlow-Session. Das Quelldokument lässt sich über den Dateinamen im Quellenbereich als PDF öffnen; die Seitenvorschau bleibt lokal.

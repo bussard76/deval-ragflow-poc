@@ -4,8 +4,12 @@ from deval_ragflow.models import DocumentExtraction, Passage
 
 
 def extraction(uid="doc", version="version"):
-    passage = Passage(uid + "-p", uid, version, 1, 1, None, (0.0, 0.0, 10.0, 10.0), 0, 4, "text")
-    return DocumentExtraction(uid, version, "a" * 64, "file.pdf", "extracted", 1, 4, "text", [passage])
+    passage = Passage(
+        uid + "-p", uid, version, 1, 1, None, (0.0, 0.0, 10.0, 10.0), 0, 4, "text"
+    )
+    return DocumentExtraction(
+        uid, version, "a" * 64, "file.pdf", "extracted", 1, 4, "text", [passage]
+    )
 
 
 def test_extraction_and_mapping_are_idempotent(registry):
@@ -20,15 +24,39 @@ def test_extraction_and_mapping_are_idempotent(registry):
     second = registry.reserve_mapping("scope", item.version_uid, "deval-version.pdf")
     assert first.mapping_uid == second.mapping_uid
     registry.set_mapping_remote("scope", item.version_uid, "remote-doc")
-    assert registry.get_mapping_by_remote_id("remote-doc").version_uid == item.version_uid
+    assert (
+        registry.get_mapping_by_remote_id("remote-doc").version_uid == item.version_uid
+    )
+
+
+def test_delete_mapping_removes_unshared_provenance(registry):
+    item = extraction()
+    registry.save_extraction(item)
+    registry.upsert_dataset("scope", "remote-dataset", "name")
+    registry.reserve_mapping("scope", item.version_uid, "same.pdf")
+    registry.set_mapping_remote("scope", item.version_uid, "remote-doc")
+    registry.upsert_index("scope", "parse", item.version_uid, state="DONE")
+
+    deleted = registry.delete_mapping("scope", item.version_uid)
+
+    assert deleted is not None
+    assert registry.get_mapping("scope", item.version_uid) is None
+    assert registry.counts()["ragflow_documents"] == 0
+    assert registry.counts()["document_versions"] == 0
+    assert registry.counts()["documents"] == 0
+    assert registry.counts()["indexes"] == 0
 
 
 def test_concurrent_reservations_share_one_mapping(registry):
     item = extraction()
     registry.save_extraction(item)
     registry.upsert_dataset("scope", "remote-dataset", "name")
+
     def reserve(_):
-        return registry.reserve_mapping("scope", item.version_uid, "same.pdf").mapping_uid
+        return registry.reserve_mapping(
+            "scope", item.version_uid, "same.pdf"
+        ).mapping_uid
+
     with ThreadPoolExecutor(max_workers=8) as pool:
         ids = list(pool.map(reserve, range(20)))
     assert len(set(ids)) == 1

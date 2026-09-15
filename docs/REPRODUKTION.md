@@ -1,6 +1,6 @@
 # Reproduktion (lokal)
 
-Die folgenden Schritte starten den offiziellen RAGFlow-Stand `v0.27.1`, ingestieren beide Deval-PDFs und prüfen Retrieval, Antworten und Provenienz.
+Die folgenden Schritte starten den offiziellen RAGFlow-Stand `v0.27.2`, ingestieren beide Deval-PDFs und prüfen Retrieval, Antworten und Provenienz.
 
 ## 1. Umgebung vorbereiten
 
@@ -19,7 +19,7 @@ In `.env` eintragen:
 RAGFLOW_BASE_URL=http://localhost:9380
 RAGFLOW_API_KEY=<RAGFlow-API-Key>
 RAGFLOW_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5@Builtin
-RAGFLOW_LLM_MODEL=qwen2.5:0.5b@local@Ollama
+RAGFLOW_LLM_MODEL=gpt-5.6-luna@codex@OpenAI
 ```
 
 `.env` bleibt lokal und ist ignoriert. Die Basis-URL darf **nicht** `/api/v1` enthalten.
@@ -35,28 +35,18 @@ python -m deval_ragflow doctor
 
 `doctor` muss `health.ok: true`, eine erfolgreiche authentifizierte Dataset-Abfrage und `sqlite_writable: true` melden.
 
-## 3. Lokales Chat-Modell konfigurieren
+## 3. Externes Chat-/GraphRAG-Modell konfigurieren
 
-```bash
-docker run -d --name deval-ollama \
-  --restart unless-stopped \
-  -p 127.0.0.1:11434:11434 \
-  -v deval_ollama_data:/root/.ollama \
-  ollama/ollama@sha256:684d8674b4315fa18f4f0e973a118ec2652ed96f67563277839985175858e0ba
-docker exec deval-ollama ollama pull qwen2.5:0.5b
-```
+Ollama wird für dieses Setup nicht benötigt. In RAGFlow unter **Settings → Model providers → OpenAI** eine Instanz `codex` oder den Namen des eigenen Gateways anlegen:
 
-In RAGFlow unter **Settings → Model providers → Ollama** die Instanz `local` anlegen:
-
-- Base URL: `http://host.docker.internal:11434`
-- Modell: `qwen2.5:0.5b`
+- Base URL: `https://api.openai.com/v1` oder die URL des eigenen OpenAI-kompatiblen Gateways
+- API-Key: Key des externen LLM-Providers
 - Typ: Chat
+- Modell: die tatsächlich verfügbare externe Modell-ID, z. B. `gpt-5.6-luna`
 
-Auf Linux kann statt `host.docker.internal` die für Docker erreichbare Host-Adresse nötig sein.
+Für die drei im Webchat hinterlegten Modell-IDs `gpt-5.6-luna`, `gpt-5.6-sol` und `gpt-5.6-terra` muss RAGFlow jeweils ein Chatmodell mit exakt dieser ID kennen. Der passende zusammengesetzte Wert in `.env` ist z. B. `gpt-5.6-luna@codex@OpenAI`. Bei einem anderen Instanznamen oder einer anderen Factory den exakten Wert aus RAGFlows Chatmodell-Katalog verwenden.
 
-### GPT-5.6 Codex-Modelle für den Webchat
-
-`config/models.json` enthält außerdem die in Pi.dev unter `openai-codex` verfügbaren IDs `gpt-5.6-luna`, `gpt-5.6-sol` und `gpt-5.6-terra`. Dafür in RAGFlow unter **Settings → Model providers → OpenAI** eine Instanz `codex` anlegen, einen OpenAI-kompatiblen API-Endpunkt und Zugang hinterlegen und die drei IDs exakt als Chat-Modelle hinzufügen. Der Webchat verwendet dann z. B. `gpt-5.6-luna@codex@OpenAI`. Pi.dev's OAuth-Datei wird nicht automatisch von RAGFlow übernommen; für ein ChatGPT/Codex-Abo ist daher ein kompatibles Gateway erforderlich.
+Der externe Provider-Key wird ausschließlich in RAGFlow gespeichert. `RAGFLOW_API_KEY` ist dagegen der separate RAGFlow-Key, den DEval für die API-Aufrufe benötigt.
 
 ## 4. Beide PDFs ingestieren
 
@@ -116,17 +106,17 @@ Nach dem Start von RAGFlow und dem Anlegen der Modell-Provider laufen API und UI
 
 ```bash
 # Terminal 1, Repository-Root
-.venv/bin/deval-webchat
+.venv/bin/deval-webchat --host 127.0.0.1 --port 8790
 
 # Terminal 2
 cd frontend
 pnpm install
-pnpm dev
+DEVAL_API_URL=http://127.0.0.1:8790 pnpm dev --host 127.0.0.1
 ```
 
 Die UI ist anschließend unter `http://localhost:5173` erreichbar. Sammlung anlegen, mehrere PDFs auswählen und den Status bis **GraphRAG bereit** verfolgen. Das Modell wird aus `config/models.json` geladen; deaktivierte Einträge bleiben unsichtbar. Erst nach dem erfolgreichen GraphRAG-Aufbau ist der Chat freigeschaltet. Zitate werden nach der Chatantwort separat über `/retrieval` aufgelöst. Der rechte Quellenbereich ist weiterhin nur ein gekennzeichneter Prototyp-Mock.
 
-Die Web-API läuft standardmäßig auf `http://127.0.0.1:8787` und stellt bereit:
+Die für den Webchat verwendete Web-API läuft hier auf `http://127.0.0.1:8790` und stellt bereit:
 
 - `GET /api/collections` und `POST /api/collections`
 - `POST /api/collections/{id}/upload` (multipart, asynchron)

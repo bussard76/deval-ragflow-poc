@@ -1,14 +1,25 @@
-# Deval RAGFlow PDF Provenance PoC
+# DEval – RAGFlow PDF-Provenance-PoC
 
-A small, local-first proof of concept: PyMuPDF extracts deterministic PDF provenance, SQLite records it, and one async `httpx` adapter talks to the official RAGFlow HTTP API. `ask` uses the configured local RAGFlow chat model for a concise answer; citation matching remains deterministic and never uses an LLM.
+DEval ist ein lokaler Webchat für PDF-Dokumente. PyMuPDF extrahiert die Dokumente deterministisch, SQLite speichert die lokale Provenienz und RAGFlow übernimmt Parsing, Retrieval, GraphRAG und die Antwortgenerierung.
 
-## Requirements
+Die LLM-Inferenz läuft in diesem Setup **nicht lokal über Ollama**, sondern über einen in RAGFlow konfigurierten externen/OpenAI-kompatiblen Provider. Nur die Embeddings laufen standardmäßig lokal im offiziellen RAGFlow-TEI-Container.
 
-- Python 3.9–3.12 (the tested host is Python 3.9.6)
-- Docker Compose >= 2.26.1 for RAGFlow, x86-oriented hardware, at least 4 CPUs/16 GB RAM/50 GB disk, and Elasticsearch's `vm.max_map_count >= 262144`
-- The official stack is resource-heavy; ARM hosts may need a locally built RAGFlow image.
+## Schnellstart
 
-Install in an isolated environment:
+### Voraussetzungen
+
+- Docker Desktop mit Docker Compose (mindestens Compose 2.26.1)
+- Python 3.9–3.12
+- Node.js und `pnpm`
+- macOS/ARM: Docker muss `linux/amd64` emulieren können
+- Für RAGFlow mindestens ca. 4 CPUs, 16 GB RAM und 50 GB freien Speicher
+- Auf Linux: `vm.max_map_count >= 262144` für Elasticsearch
+
+Der offizielle RAGFlow-Stack ist ressourcenintensiv. Für einen ersten Start sollten keine weiteren großen Docker-Stacks laufen.
+
+### 1. Python-Umgebung und DEval-Konfiguration
+
+Im Repository-Root:
 
 ```bash
 python3 -m venv .venv
@@ -17,84 +28,256 @@ python -m pip install -e '.[test]'
 cp .env.example .env
 ```
 
-`.env` is ignored. `RAGFLOW_BASE_URL` defaults to `http://localhost:9380`; omit `/api/v1` because the adapter owns that route prefix. Set `RAGFLOW_API_KEY` from RAGFlow's Avatar → API screen. The reproducible local defaults are `BAAI/bge-small-en-v1.5@Builtin` for the official TEI CPU service and `qwen2.5:0.5b@local@Ollama` for a local chat model; configure the Ollama provider as described below. In v0.27.1 the LLM value is a local readiness label: GraphRAG uses the model provider configured for the RAGFlow tenant because dataset creation has no documented per-dataset LLM field.
+Danach `.env` bearbeiten. Die wichtigsten Variablen sind:
 
-## Official RAGFlow deployment
+```dotenv
+# RAGFlow API, ohne /api/v1 – diesen Präfix ergänzt DEval selbst.
+RAGFLOW_BASE_URL=http://127.0.0.1:9380
 
-The wrapper stages the official `docker/` directory from commit `b9df87c4c75a5b0d35c90d15329fc0f6f91cb73e` (tag `v0.27.1`) into ignored `.data/ragflow-v0.27.1/`; the upstream compose files are not patched. It does not vendor a partial service graph or add an application container. A generated runtime `.env` randomizes dependency passwords, uses the official Elasticsearch/CPU/MySQL profiles plus the official `tei-cpu` embedding service, binds published ports to loopback, and leaves data in official named volumes (`esdata01`, `mysql_data`, `minio_data`, `redis_data`). The CPU profile uses `BAAI/bge-small-en-v1.5` to keep the local model practical on ARM/CPU hosts. The sandbox profile and Docker socket are not enabled.
+# Separater RAGFlow-API-Key, nicht der Key des externen LLM-Providers.
+RAGFLOW_API_KEY=<RAGFLOW_API_KEY>
+
+# Lokaler Scope der CLI und der Provenienz-Registry.
+RAGFLOW_DATASET_NAME=deval-poc
+
+# Embeddings: offizieller TEI-CPU-Service aus dem Docker-Stack.
+RAGFLOW_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5@Builtin
+
+# Externes Chat-/GraphRAG-Modell. Der Wert muss exakt zu einem
+# konfigurierten Chatmodell in RAGFlow passen.
+RAGFLOW_LLM_MODEL=gpt-5.6-luna@codex@OpenAI
+```
+
+`RAGFLOW_API_KEY` wird in RAGFlow erzeugt. Niemals einen externen OpenAI-/Anthropic-Key in Git, in die Frontend-Konfiguration oder in den Browser eintragen.
+
+Die übrigen Variablen stehen vollständig in [`.env.example`](.env.example). Die wichtigsten optionalen Werte sind:
+
+| Variable | Zweck | Standard |
+| --- | --- | --- |
+| `RAGFLOW_CHUNK_METHOD` | RAGFlow-Parser | `naive` |
+| `RAGFLOW_CHUNK_TOKEN_NUM` | Zielgröße der Chunks | `512` |
+| `RAGFLOW_REGISTRY_PATH` | lokale SQLite-Provenienz | `.data/registry.sqlite3` |
+| `RAGFLOW_REQUEST_TIMEOUT` | HTTP-Timeout | `30` Sekunden |
+| `RAGFLOW_PARSE_TIMEOUT` | Parsing-Timeout | `1800` Sekunden |
+| `RAGFLOW_GRAPH_TIMEOUT` | GraphRAG-Timeout | `1800` Sekunden |
+| `RAGFLOW_CITATION_THRESHOLD` | Mindestscore für Text-Matching | `0.60` |
+| `DEVAL_MODEL_CONFIG` | Modellkatalog des Webchats | `config/models.json` |
+| `DEVAL_RAGFLOW_STATELESS_CHAT` | RAGFlow-Sessions/Verlauf deaktivieren | `true` |
+| `RUN_LIVE_RAGFLOW_TESTS` | Live-Tests explizit aktivieren | `false` |
+
+### 2. Offizielle RAGFlow-Container starten
+
+Die Compose-Dateien werden von `scripts/ragflow-compose.sh` aus dem offiziellen RAGFlow-Repository gestaged. Die erzeugte Docker-`.env` liegt unter `.data/` und bleibt aus Git ausgeschlossen.
 
 ```bash
 ./scripts/ragflow-compose.sh verify
-./scripts/ragflow-compose.sh config
 ./scripts/ragflow-compose.sh up
 ./scripts/ragflow-compose.sh wait
+./scripts/ragflow-compose.sh ps
 ```
 
-`config` redacts generated credentials even when Compose has interpolated them into healthcheck or command arguments.
-
-### Local chat model
-
-Retrieval only needs the TEI embedding model. GraphRAG and the live-test configuration also require a usable chat model. Start the pinned Ollama image and pull the small local model:
+`wait` wartet auf den echten RAGFlow-Readiness-Endpunkt und kann beim ersten Start mehrere Minuten dauern. Die normalen Lifecycle-Befehle sind:
 
 ```bash
-docker run -d --name deval-ollama \
-  --restart unless-stopped \
-  -p 127.0.0.1:11434:11434 \
-  -v deval_ollama_data:/root/.ollama \
-  ollama/ollama@sha256:684d8674b4315fa18f4f0e973a118ec2652ed96f67563277839985175858e0ba
-# If the digest is unavailable on the selected platform, use ollama/ollama:latest.
-docker exec deval-ollama ollama pull qwen2.5:0.5b
+./scripts/ragflow-compose.sh ps
+./scripts/ragflow-compose.sh logs ragflow-cpu
+./scripts/ragflow-compose.sh down
 ```
 
-In RAGFlow **Settings → Model providers → Ollama**, add instance `local` with base URL `http://host.docker.internal:11434` and model `qwen2.5:0.5b` as a chat model. Keep the model labels in `.env.example`; do not put provider credentials in tracked files. CPU generation is intentionally small and can take a few minutes; use `ask --timeout 360` when needed.
+`down` entfernt **keine** persistenten Volumes. Niemals `docker compose down -v` verwenden, wenn die vorhandenen Dokumente und RAGFlow-Daten erhalten bleiben sollen.
 
-### GPT-5.6 Codex models
+### 3. Externes LLM in RAGFlow konfigurieren
 
-The webchat catalog also exposes the exact GPT-5.6 model IDs currently listed by Pi's `openai-codex` provider: `gpt-5.6-luna`, `gpt-5.6-sol`, and `gpt-5.6-terra`. RAGFlow does not read Pi's `~/.pi/agent/auth.json` or speak the Codex OAuth transport directly. To use these entries, configure an OpenAI-compatible RAGFlow provider instance named `codex`, add each exact model ID as a chat model, and keep the composite values used by `config/models.json` (for example `gpt-5.6-luna@codex@OpenAI`). A compatible gateway/API credential is required; no credential is stored in the repository or sent to the browser.
+Ollama ist für diesen Ablauf nicht erforderlich und wird nicht gestartet.
 
-`wait` checks the official readiness endpoint, not process startup order:
-`http://127.0.0.1:9380/api/v1/system/healthz`. Use `ps`, `logs`, and `down` for ordinary lifecycle operations. The wrapper never removes persistent volumes. If the upstream release changes, update the commit, routes, compose provenance, fixtures, and tests together; see [DECISIONS.md](DECISIONS.md).
+1. RAGFlow im Browser öffnen: <http://127.0.0.1>
+2. Einloggen und **Settings → Model providers** öffnen.
+3. Einen externen Provider konfigurieren, zum Beispiel **OpenAI**:
+   - Instanzname: `codex`
+   - Base URL: `https://api.openai.com/v1` oder die URL des eigenen OpenAI-kompatiblen Gateways
+   - API-Key: der Key des externen LLM-Providers
+   - Chatmodelle: die tatsächlich verfügbaren Modell-IDs, z. B. `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`
+4. Für jedes Modell den Typ **Chat** aktivieren und die Provider-Konfiguration testen.
+5. Unter **Avatar → API** einen RAGFlow-API-Key erzeugen und als `RAGFLOW_API_KEY` in der Root-`.env` eintragen.
+6. `RAGFLOW_LLM_MODEL` auf den exakten von RAGFlow gelieferten Modellwert setzen. In diesem Repository sind die Modellkatalogwerte beispielsweise:
 
-## Webchat UI
+   ```text
+   gpt-5.6-luna@codex@OpenAI
+   gpt-5.6-sol@codex@OpenAI
+   gpt-5.6-terra@codex@OpenAI
+   ```
 
-Die React/Vite-Oberfläche basiert weitgehend auf dem Figma-Export und verbindet den ersten Happy Path mit der lokalen Web-API:
+Der Modellwert ist eine RAGFlow-Referenz auf **Modell, Provider-Instanz und Factory**. Wenn das Gateway einen anderen Instanznamen oder eine andere Factory verwendet, muss der Wert entsprechend angepasst werden. `RAGFLOW_API_KEY` und der externe Provider-Key sind zwei verschiedene Zugangsdaten.
+
+Der TEI-Service für `BAAI/bge-small-en-v1.5` ist Teil des offiziellen Compose-Stacks und stellt nur Embeddings bereit. Er ersetzt keine Chat-/GraphRAG-Inferenz.
+
+### 4. DEval-Backend starten
+
+In einem zweiten Terminal, ebenfalls im Repository-Root:
 
 ```bash
-# Terminal 1: Backend-API (aus dem Repository-Root)
-.venv/bin/deval-webchat
+. .venv/bin/activate
+.venv/bin/deval-webchat --host 127.0.0.1 --port 8790
+```
 
-# Terminal 2: Frontend
+Das Backend spricht mit RAGFlow und stellt die lokale Web-API bereit. Es läuft absichtlich getrennt von RAGFlow.
+
+### 5. Frontend starten und öffnen
+
+In einem dritten Terminal:
+
+```bash
 cd frontend
 pnpm install
-pnpm dev
+DEVAL_API_URL=http://127.0.0.1:8790 pnpm dev --host 127.0.0.1
 ```
 
-Die API stellt Collection-, Upload-, Job-/Graph-Status-, Modell-, Retrieval- und Chat-Endpunkte bereit. Uploads laufen asynchron; die UI pollt den Collection-Status bis `GraphRAG bereit`. Modelle werden ohne Secrets aus `config/models.json` geladen. Der Quellenbereich ist noch als Prototyp gekennzeichnet; PDF-Navigation und Hervorhebung folgen später. Details stehen in `frontend/README.md`.
+Danach im Browser öffnen:
+
+<http://127.0.0.1:5173>
+
+Falls `pnpm dev` wegen einer lokalen pnpm-Build-Freigabe mit `ERR_PNPM_IGNORED_BUILDS` abbricht, den Vite-Prozess direkt starten:
+
+```bash
+cd frontend
+DEVAL_API_URL=http://127.0.0.1:8790 ./node_modules/.bin/vite --host 127.0.0.1
+```
+
+Die Vite-Variable `DEVAL_API_URL` ist wichtig, wenn das Backend auf Port `8790` läuft. Ohne sie verwendet der Vite-Proxy den Fallback-Port `8787`.
+
+## URLs und Ports
+
+| Dienst | URL | Verwendung |
+| --- | --- | --- |
+| DEval-Frontend | <http://127.0.0.1:5173> | Browser-Oberfläche |
+| DEval-Backend | <http://127.0.0.1:8790> | lokale API für das Frontend |
+| RAGFlow-Weboberfläche | <http://127.0.0.1> | Login, Provider, Dataset-UI |
+| RAGFlow-API | <http://127.0.0.1:9380> | Adapter und CLI |
+| RAGFlow-Admin-Server | <http://127.0.0.1:9381> | Admin-/Health-Endpunkte, keine normale UI |
+
+Schnelle Erreichbarkeitstests:
+
+```bash
+curl -i http://127.0.0.1:9380/api/v1/system/healthz
+curl -i http://127.0.0.1:9381/api/v1/admin/ping
+curl -i http://127.0.0.1:8790/api/health
+```
+
+## Verwendung des Webchats
+
+1. Frontend unter <http://127.0.0.1:5173> öffnen.
+2. Eine Sammlung anlegen oder auswählen.
+3. Neben der Sammlung ein oder mehrere PDFs hochladen.
+4. Warten, bis Parsing und GraphRAG abgeschlossen sind und der Status **GraphRAG aktuell** bzw. **GraphRAG bereit** anzeigt.
+5. Ein konfiguriertes externes Chatmodell auswählen.
+6. Eine Frage stellen. Die Quellen erscheinen neben den relevanten Aussagen.
+7. Mit `+` im Chatkopf beliebig viele Chats je Sammlung im Browser anlegen und zwischen ihnen wechseln.
+8. Dokumente können in der aufklappbaren Sammlung gelöscht werden. Danach wird GraphRAG erneut aktualisiert.
+
+Die Sammlung ist im linken Bereich als Ordner dargestellt. Dokumente bleiben dort sichtbar und auswählbar. Chatverläufe und Modellwahl bleiben je Sammlung/Chat ausschließlich im Browser. Der Dateiname im Quellenbereich öffnet das vollständige PDF in einem neuen Tab; die Seitenvorschau und Provenienz bleiben lokal.
+
+## Was beim Upload und bei einer Frage passiert
+
+```text
+PDF im Browser
+  -> DEval-Backend
+  -> lokale PyMuPDF-Extraktion + SHA-256 + SQLite-Provenienz
+  -> RAGFlow-Dataset und deterministisches Remote-Dokument
+  -> RAGFlow-Parsing / Chunking
+  -> GraphRAG-Aufbau nach erfolgreichem Parsing
+  -> stateless Chatantwort über RAGFlows OpenAI-kompatiblen Endpoint
+  -> separater Retrieval-Aufruf für deterministische Quellen
+```
+
+Wichtige Eigenschaften:
+
+- `document_uid` ist der SHA-256-Hash der PDF-Bytes.
+- Die lokale Registry liegt in `.data/registry.sqlite3` und enthält Provenienz, Seiten, Absätze, Bboxes und RAGFlow-Mappings.
+- Uploads laufen asynchron; das Frontend fragt Job- und GraphRAG-Status regelmäßig ab.
+- Malformed, verschlüsselte, leere und reine Scan-PDFs werden lokal registriert, aber nicht automatisch hochgeladen.
+- Mixed-PDFs benötigen im CLI `--allow-mixed`; im Webchat wird die Verarbeitung entsprechend angezeigt.
+- Zitate werden nicht vom LLM geraten: Die Chatantwort und die Quellenauflösung sind getrennt. `CitationResolver` ordnet RAGFlow-Referenzen deterministisch lokalen Seiten und Absätzen zu.
+- Der Webchat prüft die GraphRAG-Bereitschaft. Standardmäßig erzeugt er keine RAGFlow-Session und sendet den lokalen Verlauf über `/api/v1/openai/{chat_id}/chat/completions`; `DEVAL_RAGFLOW_STATELESS_CHAT=false` schaltet testweise auf den alten Session-Flow zurück.
+- Die normale Quellenauflösung verwendet weiterhin einen separaten Retrieval-Aufruf ohne KG-Nutzung. Im CLI muss KG-Nutzung mit `query --use-kg` explizit angefordert werden.
 
 ## CLI
 
+Alle CLI-Befehle werden aus dem Repository-Root mit aktivierter virtueller Umgebung ausgeführt:
+
 ```bash
+. .venv/bin/activate
+
+# Konfiguration, RAGFlow-Health und SQLite prüfen
 python -m deval_ragflow doctor
-python -m deval_ragflow extract ./paper.pdf
-python -m deval_ragflow ingest ./paper.pdf
-python -m deval_ragflow ingest ./mixed.pdf --allow-mixed
+
+# PDF lokal prüfen und Provenienz extrahieren
+python -m deval_ragflow extract ./data/input/datei.pdf
+
+# PDF ingestieren, parsen und Status abwarten
+python -m deval_ragflow ingest ./data/input/datei.pdf --allow-mixed --timeout 1800
+
+# Parsingstatus einer lokalen Version prüfen
 python -m deval_ragflow status VERSION_UID
-python -m deval_ragflow query "What does the paper conclude?"
+
+# Retrieval mit deterministischen Quellen
+python -m deval_ragflow query "Welche zentralen Ergebnisse nennt die Studie?"
+
+# Retrieval mit expliziter GraphRAG/KG-Nutzung
+python -m deval_ragflow query "Welche Entitäten hängen zusammen?" --use-kg
+
+# Chatantwort über den externen RAGFlow-LLM-Provider
 python -m deval_ragflow ask "Welche zentralen Ergebnisse nennt die Studie?" --timeout 360
-python -m deval_ragflow query "Find related entities" --use-kg
-python -m deval_ragflow graph
+
+# Antwort maschinenlesbar ausgeben
+python -m deval_ragflow ask "Welche zentralen Ergebnisse nennt die Studie?" --timeout 360 --json
+
+# GraphRAG manuell starten bzw. inspizieren
+python -m deval_ragflow graph --timeout 3600
+
+# Laufende Verarbeitung abbrechen
 python -m deval_ragflow cancel VERSION_UID
-python -m deval_ragflow reset-test-data --dataset-id REMOTE_ID --confirm 'DELETE DEVAL TEST DATA'
 ```
 
-`query` returns retrieved evidence and deterministic local citations. `ask` creates/reuses a deterministic chat, asks RAGFlow for a concise answer, then performs a separate retrieval call for the displayed citations; an explicit chat/provider failure is an error, never a fake success. `doctor` reports health, authenticated dataset access when a key is present, SQLite writability, and a non-secret list of missing model/key configuration without printing the key. `reset-test-data` accepts only an explicitly owned local dataset ID and the exact confirmation string; remote deletion succeeds before local rows are removed.
+Die beiden Beispiel-PDFs liegen in `data/input/`. Bei den mitgelieferten Summary-PDFs ist `--allow-mixed` erforderlich.
 
-## Provenance and limits
+## Daten, Secrets und Reset
 
-`document_uid` is the lowercase SHA-256 of raw PDF bytes. `version_uid` hashes the document identity, provenance schema, extractor version, and canonical parser JSON. Text blocks are deterministic 1-based page paragraphs; coordinates are PDF points rounded to two decimals; character ranges are Unicode-code-point half-open offsets into canonical text (newline between blocks, form-feed between pages). PDF outlines provide `section_path` when available; no semantic heading detection is claimed.
+Es gibt zwei verschiedene `.env`-Dateien:
 
-Malformed, encrypted, empty, and image-only PDFs are saved by ingestion in the local registry but not uploaded. Mixed text/image PDFs require `--allow-mixed`. Byte, page, and text limits run before any remote request. A crash after a remote upload and before SQLite mapping commit cannot be made exactly-once; deterministic names and metadata reconcile one match and surface multiple matches.
+1. **Root `.env`**: DEval-Konfiguration, RAGFlow-URL, RAGFlow-API-Key und Modellreferenzen.
+2. **`.data/ragflow-v0.27.2/docker/.env`**: automatisch erzeugte Docker-Runtime-Werte für MySQL, Elasticsearch, MinIO, Redis usw. Diese Datei ist ignoriert und darf nicht committed werden.
 
-Retrieval returns raw RAGFlow chunks and deterministic citations. `ask` adds concise RAGFlow chat generation but resolves citations through the independent retrieval path. Resolution uses a verified v0.27.1 PDF bbox position, exact normalized text, then multiset token Dice overlap (default threshold 0.60); citations include page/paragraph, section, bbox, character range, method, and confidence. Unknown IDs and low-confidence matches remain unresolved. Graph construction requires parsed chunks and a configured RAGFlow LLM.
+Persistente RAGFlow-Daten liegen in Docker-Volumes, unter anderem für MySQL, Elasticsearch, MinIO und Redis. Die Compose-Hülle entfernt diese Volumes nicht.
 
-Die vollständige Schritt-für-Schritt-Anleitung steht auf Deutsch in [docs/REPRODUKTION.md](docs/REPRODUKTION.md). See [ARCHITECTURE.md](ARCHITECTURE.md), [TESTPLAN.md](TESTPLAN.md), and [docs/DECISIONS.md](docs/DECISIONS.md).
+Ein explizit von diesem PoC besessenes Test-Dataset kann geschützt gelöscht werden:
+
+```bash
+python -m deval_ragflow reset-test-data \
+  --dataset-id REMOTE_DATASET_ID \
+  --confirm 'DELETE DEVAL TEST DATA'
+```
+
+Die lokale Registry wird erst nach erfolgreicher Remote-Löschung bereinigt. Beliebige Dataset-IDs werden abgewiesen.
+
+Bei einem MySQL-Fehler `Access denied for user 'root'` liegt fast immer ein Passwortunterschied zwischen dem bereits initialisierten Docker-Volume und der aktuellen Docker-`.env` vor. Nicht `down -v` ausführen. Erst `./scripts/ragflow-compose.sh verify` prüfen; die Hülle stellt sicher, dass `MYSQL_PASSWORD` und `MYSQL_ROOT_PASSWORD` bei neuen Installationen gleich erzeugt werden.
+
+## Tests und Validierung
+
+```bash
+. .venv/bin/activate
+python -m compileall -q src tests
+python -m pytest -q
+
+# Live-Test nur explizit aktivieren; er verwendet echte PDFs und RAGFlow.
+RUN_LIVE_RAGFLOW_TESTS=true python -m pytest -q -rs tests/test_live_ragflow.py
+```
+
+Der Live-Test benötigt einen gültigen `RAGFLOW_API_KEY`, ein konfiguriertes Embedding-Modell und ein konfiguriertes externes `RAGFLOW_LLM_MODEL`. Er kann echte Remote-Dokumente anlegen und Provider-/Docker-Ressourcen verbrauchen.
+
+## Weiterführende Dokumente
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) – technische Grenzen und Datenfluss
+- [docs/REPRODUKTION.md](docs/REPRODUKTION.md) – ältere ausführliche Reproduktionsnotizen
+- [docs/DECISIONS.md](docs/DECISIONS.md) – API-/Release-Entscheidungen
+- [TESTPLAN.md](TESTPLAN.md) – Testumfang und Live-Test-Regeln
+- [frontend/README.md](frontend/README.md) – kurzer Frontend-Hinweis

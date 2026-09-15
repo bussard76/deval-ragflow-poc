@@ -4,11 +4,17 @@ from dataclasses import replace
 from http.client import HTTPConnection
 from pathlib import Path
 from threading import Thread
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 
-from deval_ragflow.models import GraphStatus, RemoteStatus, RetrievalResult
+from deval_ragflow.models import (
+    DocumentExtraction,
+    GraphStatus,
+    Passage,
+    RemoteStatus,
+    RetrievalResult,
+)
 from deval_ragflow.web import (  # type: ignore[import-not-found]
     WebApplication,
     WebError,
@@ -21,10 +27,13 @@ PDF = Path(__file__).parent / "fixtures" / "golden.pdf"
 
 class FakeAdapter:
     instances: ClassVar[list["FakeAdapter"]] = []
+    empty_graph: ClassVar[bool] = False
 
     def __init__(self, *args, **kwargs):
         self.last_dataset_created = True
         self.chat_llm_model = ""
+        self.chat_session_calls = 0
+        self.chat_completion_calls: list[dict[str, Any]] = []
         self.retrieve_calls: list[dict[str, object]] = []
         type(self).instances.append(self)
 
@@ -53,6 +62,9 @@ class FakeAdapter:
     async def patch_document(self, *args, **kwargs):
         return {"id": "remote-doc"}
 
+    async def delete_document(self, *args, **kwargs):
+        return {"code": 0}
+
     async def document_status(self, *args, **kwargs):
         return RemoteStatus("DONE", 1.0, "done", ("done",), 1, 1, {"run": "DONE"})
 
@@ -61,9 +73,13 @@ class FakeAdapter:
         return {"id": "remote-chat"}
 
     async def create_chat_session(self, chat_id, *, name=""):
+        self.chat_session_calls += 1
         return {"id": "remote-session"}
 
     async def chat_completion(self, chat_id, question, session_id, **kwargs):
+        self.chat_completion_calls.append(
+            {"chat_id": chat_id, "question": question, "session_id": session_id, **kwargs}
+        )
         return {
             "code": 0,
             "data": {
@@ -72,6 +88,7 @@ class FakeAdapter:
                     "chunks": [
                         {
                             "document_id": "remote-doc",
+                            "image_id": "remote-dataset-chunk",
                             "positions": [[1, 1, 0, 1]],
                             "content": "A cited passage.",
                         }
@@ -79,6 +96,14 @@ class FakeAdapter:
                 },
             },
         }
+
+    async def get_document_image(self, image_id, **kwargs):
+        assert image_id == "remote-dataset-chunk"
+        return b"jpeg-bytes", "image/jpeg"
+
+    async def download_document(self, dataset_id, document_id, **kwargs):
+        assert dataset_id == "remote-dataset" and document_id == "remote-doc"
+        return b"%PDF-1.7", "application/pdf"
 
     async def retrieve(self, *args, **kwargs):
         self.retrieve_calls.append(kwargs)
@@ -100,6 +125,8 @@ class FakeAdapter:
         return GraphStatus("graph-task", "DONE", 1.0, "done", {"progress": 1})
 
     async def get_graph(self, dataset_id):
+        if type(self).empty_graph:
+            return {"graph": {"nodes": [], "edges": []}}
         return {"graph": {"nodes": [{"id": "n"}], "edges": []}}
 
 
@@ -165,16 +192,151 @@ def test_web_application_wires_collection_upload_graph_and_chat(
             pytest.fail(f"upload did not become ready: {current}")
 
         assert current["documents"] == ["golden.pdf"]
+        assert current["graph"]["state"] == "current"
+        assert current["graph"]["document_count"] == 1
+
+        app.registry.upsert_index(
+            "Web collection",
+            "graph",
+            state="RUNNING",
+            progress=0.4,
+            progress_msg="building",
+        )
+        updating = app._collection_view("Web collection")
+        assert updating["status"] == "building"
+        assert updating["graph"]["state"] == "updating"
+        assert updating["graph"]["progress"] == 0.4
+        app.registry.upsert_index("Web collection", "graph", state="DONE", progress=1.0)
+
         response = app.answer(
             "Web collection", "local", "What is the result?", "conversation"
         )
         assert response["answer"] == "Eine echte Antwort [ID:0]."
         assert response["model"]["id"] == "local"
         assert len(response["citations"]) == 1
-        assert response["citations"][0]["excerpt"]
+        citation = response["citations"][0]
+        passage_uid = citation["source"]["passage_uid"]
+        expected_excerpt = next(
+            item["text"]
+            for item in app.registry.list_passages(current["document_records"][0]["id"])
+            if item["passage_uid"] == passage_uid
+        )
+        assert citation["excerpt"] == expected_excerpt
+        assert citation["excerpt"] != "A cited passage."
+        assert citation["image_id"] == "remote-dataset-chunk"
+        assert citation["document_url"] == (
+            "/api/collections/Web%20collection/documents/"
+            f"{current['document_records'][0]['id']}/file"
+        )
+        assert response["citations"][0]["image_url"] == (
+            "/api/collections/Web%20collection/source-images/remote-dataset-chunk"
+        )
         adapter = FakeAdapter.instances[-1]
+        assert app.source_image("Web collection", "remote-dataset-chunk") == (
+            b"jpeg-bytes",
+            "image/jpeg",
+        )
+        assert app.source_document(
+            "Web collection", current["document_records"][0]["id"]
+        ) == (b"%PDF-1.7", "application/pdf", "golden.pdf")
+        assert adapter.chat_session_calls == 0
+        completion_call = adapter.chat_completion_calls[-1]
+        assert completion_call["stateless"] is True
+        assert completion_call["session_id"] == ""
+        assert completion_call["messages"][-1] == {
+            "role": "user",
+            "content": "What is the result?",
+        }
+
+        second = DocumentExtraction(
+            "second-doc",
+            "second-version",
+            "b" * 64,
+            "second.pdf",
+            "extracted",
+            1,
+            12,
+            "second text",
+            [
+                Passage(
+                    "second-p",
+                    "second-doc",
+                    "second-version",
+                    1,
+                    1,
+                    None,
+                    (0.0, 0.0, 10.0, 10.0),
+                    0,
+                    12,
+                    "second text",
+                )
+            ],
+        )
+        app.registry.save_extraction(second)
+        app.registry.reserve_mapping(
+            "Web collection", "second-version", "second-remote.pdf"
+        )
+        app.registry.set_mapping_remote(
+            "Web collection", "second-version", "remote-doc-2"
+        )
+        app.registry.set_mapping_state("Web collection", "second-version", "DONE")
+        monkeypatch.setattr(FakeAdapter, "empty_graph", True)
+
+        first_delete = app.start_delete(
+            "Web collection", current["document_records"][0]["id"]
+        )
+        assert first_delete["job"]["operation"] == "delete"
+        after_first_delete = first_delete
+        for _ in range(100):
+            after_first_delete = app._collection_view("Web collection")
+            if after_first_delete["status"] == "ready":
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail(f"delete rebuild did not finish: {after_first_delete}")
+        assert after_first_delete["documents"] == ["second.pdf"]
+        assert after_first_delete["graph"]["state"] == "current"
+
+        second_delete = app.start_delete(
+            "Web collection", after_first_delete["document_records"][0]["id"]
+        )
+        assert second_delete["job"]["operation"] == "delete"
+        after_delete = second_delete
+        for _ in range(100):
+            after_delete = app._collection_view("Web collection")
+            if after_delete["status"] == "idle":
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail(f"delete did not finish: {after_delete}")
+        assert after_delete["documents"] == []
+        assert after_delete["graph"]["state"] == "empty"
         assert adapter.chat_llm_model == "model@local@Test"
         assert adapter.retrieve_calls[-1].get("use_kg") is False
+    finally:
+        app.close()
+
+
+def test_upload_accepts_completed_empty_graph(config, tmp_path, monkeypatch):
+    monkeypatch.setattr("deval_ragflow.web.RAGFlowAdapter", FakeAdapter)
+    monkeypatch.setattr(FakeAdapter, "empty_graph", True)
+    app = WebApplication(replace(config, llm_model="model@local@Test"))
+    try:
+        app.create_collection("Empty graph collection")
+        pending = app.start_upload(
+            "Empty graph collection", [("golden.pdf", PDF.read_bytes())]
+        )
+        job_id = pending["job"]["id"]
+        job = app.job_status(job_id)
+        for _ in range(100):
+            job = app.job_status(job_id)
+            if job["state"] in {"ready", "error"}:
+                break
+            time.sleep(0.02)
+        assert job["state"] == "ready", job
+        view = app._collection_view("Empty graph collection")
+        assert view["status"] == "ready"
+        assert view["graph"]["state"] == "current"
     finally:
         app.close()
 
@@ -213,6 +375,50 @@ def test_http_api_exposes_health_and_models(config, tmp_path, monkeypatch):
         models = connection.getresponse()
         assert models.status == 200
         assert json.loads(models.read())["models"][0]["id"] == "local"
+    finally:
+        connection.close()
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
+        app.close()
+
+
+def test_http_api_proxies_source_image(config, tmp_path, monkeypatch):
+    model_config = tmp_path / "models.json"
+    model_config.write_text(
+        json.dumps({"models": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("deval_ragflow.web.RAGFlowAdapter", FakeAdapter)
+    app = WebApplication(replace(config, model_config_path=model_config))
+    app.registry.upsert_dataset("test23", "remote-dataset", "test23")
+    app.registry.save_extraction(
+        DocumentExtraction(
+            "document", "version", "a" * 64, "golden.pdf", "extracted", 1, 1, "", []
+        )
+    )
+    app.registry.reserve_mapping("test23", "version", "golden.pdf")
+    app.registry.set_mapping_remote("test23", "version", "remote-doc")
+    app.registry.set_mapping_state("test23", "version", "DONE")
+    server = build_server(app, "127.0.0.1", 0)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    connection = HTTPConnection("127.0.0.1", server.server_address[1], timeout=2)
+    try:
+        connection.request(
+            "GET", "/api/collections/test23/source-images/remote-dataset-chunk"
+        )
+        image = connection.getresponse()
+        assert image.status == 200
+        assert image.headers["Content-Type"] == "image/jpeg"
+        assert image.read() == b"jpeg-bytes"
+
+        connection.request("GET", "/api/collections/test23/documents/version/file")
+        document = connection.getresponse()
+        assert document.status == 200
+        assert document.headers["Content-Type"] == "application/pdf"
+        assert document.headers["Content-Disposition"].startswith("inline;")
+        assert document.read() == b"%PDF-1.7"
     finally:
         connection.close()
         server.shutdown()

@@ -72,6 +72,7 @@ class Config:
     reconcile_max_pages: int = 20
     graph_timeout: float = 1800.0
     run_live_tests: bool = False
+    stateless_chat: bool = True
     model_config_path: Path = field(default_factory=lambda: Path("config/models.json"))
     parser_config: dict[str, object] = field(default_factory=dict)
 
@@ -195,6 +196,7 @@ class Config:
             reconcile_max_pages=integer("RAGFLOW_RECONCILE_MAX_PAGES", 20),
             graph_timeout=number("RAGFLOW_GRAPH_TIMEOUT", 1800),
             run_live_tests=boolean("RUN_LIVE_RAGFLOW_TESTS", False),
+            stateless_chat=boolean("DEVAL_RAGFLOW_STATELESS_CHAT", True),
             model_config_path=Path(value("DEVAL_MODEL_CONFIG", "config/models.json")),
         )
 

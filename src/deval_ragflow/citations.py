@@ -133,7 +133,7 @@ class CitationResolver:
     def _position_match(
         passages: Sequence[Passage], chunk: dict[str, Any]
     ) -> Passage | None:
-        """Resolve v0.27.1 PDF positions, with a four-value legacy fallback.
+        """Resolve v0.27.2 PDF positions, with a four-value legacy fallback.
 
         RAGFlow's canonical PDF position is ``[page, left, right, top,
         bottom]``.  The local registry stores PyMuPDF's ``[x0, y0, x1,

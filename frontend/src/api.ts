@@ -1,13 +1,31 @@
 export type GraphRAGStatus = "idle" | "processing" | "building" | "ready" | "error"
+export type GraphFreshness = "empty" | "current" | "updating" | "outdated" | "error"
+
+export interface GraphInfo {
+  state: GraphFreshness
+  remote_state: string
+  progress: number | null
+  message: string
+  document_count: number
+}
+
+export interface CollectionDocument {
+  id: string
+  name: string
+  state: string
+}
 
 export interface Collection {
   id: string
   name: string
   status: GraphRAGStatus
   documents: string[]
+  document_records: CollectionDocument[]
+  graph: GraphInfo
   job?: {
     id: string
     files: string[]
+    operation?: "upload" | "delete"
     completed: number
     total: number
     error: string
@@ -19,6 +37,14 @@ export interface Citation {
   page: number | null
   excerpt: string
   resolved?: boolean
+  document_url?: string
+  image_id?: string
+  image_url?: string
+  source?: {
+    image_id?: string
+    positions?: unknown
+    [key: string]: unknown
+  }
 }
 
 export interface Model {
@@ -27,6 +53,11 @@ export interface Model {
   provider: string
   description: string
   configured?: boolean
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant"
+  content: string
 }
 
 export interface ChatResponse {
@@ -84,6 +115,16 @@ export async function uploadCollection(
   })
 }
 
+export async function deleteCollectionDocument(
+  collectionId: string,
+  documentId: string,
+): Promise<Collection> {
+  return request<Collection>(
+    `/collections/${encodeURIComponent(collectionId)}/documents/${encodeURIComponent(documentId)}`,
+    { method: "DELETE" },
+  )
+}
+
 export async function listModels(): Promise<Model[]> {
   const payload = await request<{ models: Model[] }>("/models")
   return payload.models
@@ -94,6 +135,7 @@ export async function sendChat(
   modelId: string,
   question: string,
   conversationId: string,
+  history: ChatMessage[] = [],
 ): Promise<ChatResponse> {
   return request<ChatResponse>("/chat", {
     method: "POST",
@@ -103,6 +145,7 @@ export async function sendChat(
       model_id: modelId,
       question,
       conversation_id: conversationId,
+      messages: history,
     }),
   })
 }
