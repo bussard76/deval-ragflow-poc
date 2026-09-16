@@ -1,10 +1,9 @@
-"""Central, secret-free catalog of chat models exposed by the web UI."""
+"""Convert RAGFlow's chat-model response into browser-safe options."""
 
 from __future__ import annotations
 
-import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 
@@ -27,64 +26,51 @@ class ModelOption:
         }
 
 
-class ModelCatalog:
-    """Load enabled model entries from a central JSON file on demand."""
+def _text(remote: Mapping[str, Any], *fields: str) -> str:
+    for field in fields:
+        value = remote.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
-    def __init__(self, path: str | Path, fallback_model: str = ""):
-        self.path = Path(path).expanduser()
-        self.fallback_model = fallback_model.strip()
 
-    def _raw_entries(self) -> list[dict[str, Any]]:
-        if not self.path.is_file():
-            return []
-        try:
-            payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"could not load model config: {exc}") from exc
-        entries = payload.get("models", []) if isinstance(payload, dict) else payload
-        if not isinstance(entries, list):
-            raise TypeError("model config must contain a models list")
-        return [entry for entry in entries if isinstance(entry, dict)]
+def remote_model_options(
+    remote_models: Sequence[Mapping[str, Any]],
+) -> list[ModelOption]:
+    """Build options directly from RAGFlow's allowed chat models."""
 
-    def options(self) -> list[ModelOption]:
-        result: list[ModelOption] = []
-        seen: set[str] = set()
-        for entry in self._raw_entries():
-            if not entry.get("enabled", True):
-                continue
-            model_id = str(entry.get("id", "")).strip()
-            name = str(entry.get("name", "")).strip()
-            provider = str(entry.get("provider", "")).strip()
-            ragflow_model = str(
-                entry.get("ragflow_model", entry.get("model", model_id))
-            ).strip()
-            if not model_id or not name or not provider or not ragflow_model:
-                raise ValueError(
-                    "enabled model entries require id, name, provider, and ragflow_model"
-                )
-            if model_id in seen:
-                raise ValueError(f"duplicate model id: {model_id}")
-            seen.add(model_id)
-            result.append(
-                ModelOption(
-                    id=model_id,
-                    name=name,
-                    provider=provider,
-                    ragflow_model=ragflow_model,
-                    description=str(entry.get("description", "")).strip(),
-                )
-            )
-        if result or self.path.is_file() or not self.fallback_model:
-            return result
-        return [
+    result: list[ModelOption] = []
+    seen_references: set[str] = set()
+    seen_ids: set[str] = set()
+    for remote in remote_models:
+        name = _text(remote, "name", "model_name", "model")
+        model_id = _text(remote, "model_id", "id")
+        if not name and not model_id:
+            continue
+        instance = _text(remote, "instance_name", "instance")
+        provider = _text(remote, "provider_name", "provider") or "RAGFlow"
+        reference = (
+            f"{name}@{instance}@{provider}"
+            if name and instance and provider
+            else name or model_id
+        )
+        if not reference or reference in seen_references:
+            continue
+        option_id = name or reference
+        if option_id in seen_ids:
+            option_id = reference
+        if option_id in seen_ids:
+            continue
+        seen_references.add(reference)
+        seen_ids.add(option_id)
+        provider_label = f"{provider} · {instance}" if instance else provider
+        result.append(
             ModelOption(
-                id="default",
-                name=self.fallback_model,
-                provider="RAGFlow",
-                ragflow_model=self.fallback_model,
-                description="Aktuelles RAGFlow-Chatmodell",
+                id=option_id,
+                name=name or model_id,
+                provider=provider_label,
+                ragflow_model=reference,
+                description=_text(remote, "description"),
             )
-        ]
-
-    def get(self, model_id: str) -> ModelOption | None:
-        return next((item for item in self.options() if item.id == model_id), None)
+        )
+    return result

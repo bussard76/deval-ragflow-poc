@@ -1,56 +1,53 @@
-import json
-from pathlib import Path
+from deval_ragflow.model_catalog import (
+    remote_model_options,  # type: ignore[import-not-found]
+)
 
-from deval_ragflow.model_catalog import ModelCatalog  # type: ignore[import-not-found]
 
-
-def test_model_catalog_exposes_enabled_entries_without_provider_secrets(tmp_path):
-    path = tmp_path / "models.json"
-    path.write_text(
-        json.dumps(
+def test_remote_model_catalog_exposes_every_chat_model_without_secrets():
+    models = remote_model_options(
+        [
             {
-                "models": [
-                    {
-                        "id": "local",
-                        "name": "Local",
-                        "provider": "Ollama",
-                        "ragflow_model": "qwen@local@Ollama",
-                        "api_key": "must-not-be-returned",
-                        "enabled": True,
-                    },
-                    {
-                        "id": "disabled",
-                        "name": "Disabled",
-                        "provider": "Other",
-                        "ragflow_model": "other",
-                        "enabled": False,
-                    },
-                ]
-            }
-        ),
-        encoding="utf-8",
+                "model_id": "model-a-id",
+                "name": "model-a",
+                "instance_name": "local",
+                "provider_name": "Ollama",
+                "api_key": "must-not-be-returned",
+            },
+            {
+                "model_id": "model-b-id",
+                "name": "model-b",
+                "instance_name": "cloud",
+                "provider_name": "OpenAI",
+            },
+        ]
     )
 
-    models = ModelCatalog(path).options()
-
-    assert len(models) == 1
-    assert models[0].ragflow_model == "qwen@local@Ollama"
+    assert [model.id for model in models] == ["model-a", "model-b"]
+    assert [model.ragflow_model for model in models] == [
+        "model-a@local@Ollama",
+        "model-b@cloud@OpenAI",
+    ]
+    assert models[0].provider == "Ollama · local"
     assert "api_key" not in models[0].public_dict()
 
 
-def test_model_catalog_falls_back_to_configured_model_when_file_is_missing(tmp_path):
-    models = ModelCatalog(tmp_path / "missing.json", fallback_model="model").options()
+def test_remote_model_catalog_skips_duplicate_model_references():
+    rows = [
+        {
+            "model_id": "first-id",
+            "name": "model",
+            "instance_name": "cloud",
+            "provider_name": "OpenAI",
+        },
+        {
+            "model_id": "second-id",
+            "name": "model",
+            "instance_name": "cloud",
+            "provider_name": "OpenAI",
+        },
+    ]
 
-    assert [model.id for model in models] == ["default"]
-    assert models[0].ragflow_model == "model"
+    models = remote_model_options(rows)
 
-
-def test_default_catalog_includes_pi_codex_gpt_56_models():
-    path = Path(__file__).parents[1] / "config" / "models.json"
-    models = {model.id: model for model in ModelCatalog(path).options()}
-
-    model_ids = {"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"}
-    assert model_ids <= models.keys()
-    for model_id in model_ids:
-        assert models[model_id].provider == "OpenAI Codex · Pi.dev"
-        assert models[model_id].ragflow_model == f"{model_id}@codex@OpenAI"
+    assert len(models) == 1
+    assert models[0].ragflow_model == "model@cloud@OpenAI"

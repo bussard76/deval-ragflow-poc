@@ -46,6 +46,7 @@ class FakeAdapter:
     async def list_chat_models(self):
         return [
             {
+                "model_id": "remote-model",
                 "name": "model",
                 "instance_name": "local",
                 "provider_name": "Test",
@@ -173,36 +174,14 @@ def test_parse_multipart_extracts_multiple_files():
     ]
 
 
-def test_web_application_wires_collection_upload_graph_and_chat(
-    monkeypatch, config, tmp_path
-):
-    model_config = tmp_path / "models.json"
-    model_config.write_text(
-        json.dumps(
-            {
-                "models": [
-                    {
-                        "id": "local",
-                        "name": "Local",
-                        "provider": "Test",
-                        "ragflow_model": "model@local@Test",
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    app_config = replace(
-        config,
-        llm_model="model@local@Test",
-        model_config_path=model_config,
-    )
+def test_web_application_wires_collection_upload_graph_and_chat(monkeypatch, config):
+    app_config = replace(config, llm_model="model@local@Test")
     monkeypatch.setattr("deval_ragflow.web.RAGFlowAdapter", FakeAdapter)
     app = WebApplication(app_config)
     try:
         collection = app.create_collection("Web collection")
         assert collection["id"] == "Web collection"
-        assert app.models()[0]["id"] == "local"
+        assert app.models()[0]["id"] == "model"
 
         pending = app.start_upload("Web collection", [("golden.pdf", PDF.read_bytes())])
         assert pending["status"] == "processing"
@@ -234,13 +213,13 @@ def test_web_application_wires_collection_upload_graph_and_chat(
 
         response = app.answer(
             "Web collection",
-            "local",
+            "model",
             "What is the result?",
             "conversation",
             cross_languages=["English", "German"],
         )
         assert response["answer"] == "Eine echte Antwort [ID:0]."
-        assert response["model"]["id"] == "local"
+        assert response["model"]["id"] == "model"
         assert response["cross_languages"] == ["German", "English"]
         assert len(response["citations"]) == 1
         citation = response["citations"][0]
@@ -283,7 +262,7 @@ def test_web_application_wires_collection_upload_graph_and_chat(
         ]
         app.answer(
             "Web collection",
-            "local",
+            "model",
             "Antworte ausführlich",
             "conversation",
             messages=[
@@ -304,7 +283,7 @@ def test_web_application_wires_collection_upload_graph_and_chat(
         assert followup_adapter.retrieve_questions[-1] == expected_followup
         app.answer(
             "Web collection",
-            "local",
+            "model",
             "What is the result?",
             "conversation",
             cross_languages=[],
@@ -404,25 +383,9 @@ def test_upload_accepts_completed_empty_graph(config, tmp_path, monkeypatch):
         app.close()
 
 
-def test_http_api_exposes_health_and_models(config, tmp_path, monkeypatch):
-    model_config = tmp_path / "models.json"
-    model_config.write_text(
-        json.dumps(
-            {
-                "models": [
-                    {
-                        "id": "local",
-                        "name": "Local",
-                        "provider": "Test",
-                        "ragflow_model": "model",
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
+def test_http_api_exposes_health_and_models(config, monkeypatch):
     monkeypatch.setattr("deval_ragflow.web.RAGFlowAdapter", FakeAdapter)
-    app = WebApplication(replace(config, model_config_path=model_config))
+    app = WebApplication(config)
     server = build_server(app, "127.0.0.1", 0)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -437,7 +400,7 @@ def test_http_api_exposes_health_and_models(config, tmp_path, monkeypatch):
         connection.request("GET", "/api/models")
         models = connection.getresponse()
         assert models.status == 200
-        assert json.loads(models.read())["models"][0]["id"] == "local"
+        assert json.loads(models.read())["models"][0]["id"] == "model"
     finally:
         connection.close()
         server.shutdown()
@@ -446,14 +409,9 @@ def test_http_api_exposes_health_and_models(config, tmp_path, monkeypatch):
         app.close()
 
 
-def test_http_api_proxies_source_image(config, tmp_path, monkeypatch):
-    model_config = tmp_path / "models.json"
-    model_config.write_text(
-        json.dumps({"models": []}),
-        encoding="utf-8",
-    )
+def test_http_api_proxies_source_image(config, monkeypatch):
     monkeypatch.setattr("deval_ragflow.web.RAGFlowAdapter", FakeAdapter)
-    app = WebApplication(replace(config, model_config_path=model_config))
+    app = WebApplication(config)
     app.registry.upsert_dataset("test23", "remote-dataset", "test23")
     app.registry.save_extraction(
         DocumentExtraction(
@@ -490,43 +448,41 @@ def test_http_api_proxies_source_image(config, tmp_path, monkeypatch):
         app.close()
 
 
-def test_models_filter_catalog_to_ragflow_chat_models(config, tmp_path, monkeypatch):
-    model_config = tmp_path / "models.json"
-    model_config.write_text(
-        json.dumps(
-            {
-                "models": [
-                    {
-                        "id": "local",
-                        "name": "Local",
-                        "provider": "Test",
-                        "ragflow_model": "model@local@Test",
-                    },
-                    {
-                        "id": "missing",
-                        "name": "Missing",
-                        "provider": "Test",
-                        "ragflow_model": "missing@codex@Test",
-                    },
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr("deval_ragflow.web.RAGFlowAdapter", FakeAdapter)
-    app = WebApplication(replace(config, model_config_path=model_config))
+def test_models_are_loaded_from_ragflow_without_local_configuration(
+    config, monkeypatch
+):
+    class DynamicFakeAdapter(FakeAdapter):
+        async def list_chat_models(self):
+            return [
+                {
+                    "model_id": "remote-model",
+                    "name": "model",
+                    "instance_name": "local",
+                    "provider_name": "Test",
+                    "model_type": ["chat"],
+                },
+                {
+                    "model_id": "second-model",
+                    "name": "second-model",
+                    "instance_name": "cloud",
+                    "provider_name": "OpenAI",
+                    "model_type": ["chat"],
+                },
+            ]
+
+    monkeypatch.setattr("deval_ragflow.web.RAGFlowAdapter", DynamicFakeAdapter)
+    app = WebApplication(config)
     try:
         models = app.models()
-        assert {item["id"] for item in models} == {"local", "missing"}
-        assert (
-            next(item for item in models if item["id"] == "local")["configured"] is True
+        assert {item["id"] for item in models} == {"model", "second-model"}
+        assert all(item["configured"] is True for item in models)
+        assert {item["provider"] for item in models} == {
+            "Test · local",
+            "OpenAI · cloud",
+        }
+        assert app._model("second-model").ragflow_model == (
+            "second-model@cloud@OpenAI"
         )
-        assert (
-            next(item for item in models if item["id"] == "missing")["configured"]
-            is False
-        )
-        with pytest.raises(WebError, match="not configured in RAGFlow"):
-            app._model("missing")
     finally:
         app.close()
 
@@ -544,27 +500,13 @@ def test_cross_language_validation_rejects_unsupported_api_values(config):
         app.close()
 
 
-def test_chat_requires_ready_graph(config, tmp_path, monkeypatch):
-    model_config = tmp_path / "models.json"
-    model_config.write_text(
-        json.dumps(
-            {
-                "models": [
-                    {
-                        "id": "local",
-                        "name": "Local",
-                        "provider": "Test",
-                        "ragflow_model": "model",
-                    }
-                ]
-            }
-        ),
-        encoding="utf-8",
-    )
-    app = WebApplication(replace(config, model_config_path=model_config))
+def test_chat_requires_ready_graph(config):
+    app = WebApplication(config)
     try:
         app.registry.upsert_dataset("test-dataset", "remote", "test-dataset")
         with pytest.raises(WebError, match="GraphRAG is not ready"):
-            app.answer("test-dataset", "local", "question", "conversation")
+            app.answer(
+                "test-dataset", "missing-model", "question", "conversation"
+            )
     finally:
         app.close()

@@ -22,7 +22,7 @@ from .citations import CitationResolver
 from .config import Config
 from .errors import DevalError
 from .ingestion import IngestionService
-from .model_catalog import ModelCatalog, ModelOption  # type: ignore[import-not-found]
+from .model_catalog import ModelOption, remote_model_options  # type: ignore[import-not-found]
 from .registry import Registry
 
 MAX_NAME_LENGTH = 160
@@ -138,31 +138,6 @@ def _remove_temp_dir(path: Path) -> None:
         pass
 
 
-def _remote_model_keys(remote: dict[str, Any]) -> set[str]:
-    keys: set[str] = set()
-    for field in ("model_id", "id"):
-        value = remote.get(field)
-        if isinstance(value, str) and value.strip():
-            keys.add(value.strip())
-    name = ""
-    for field in ("name", "model_name", "model"):
-        value = remote.get(field)
-        if isinstance(value, str) and value.strip():
-            name = value.strip()
-            break
-    if not name:
-        return keys
-    keys.add(name)
-    instance = remote.get("instance_name")
-    provider = remote.get("provider_name")
-    if isinstance(instance, str) and isinstance(provider, str):
-        instance = instance.strip()
-        provider = provider.strip()
-        if instance and provider:
-            keys.add(f"{name}@{instance}@{provider}")
-    return keys
-
-
 def _completion_reference_chunks(completion: dict[str, Any]) -> list[dict[str, Any]]:
     data = completion.get("data")
     if not isinstance(data, dict):
@@ -222,9 +197,6 @@ class WebApplication:
     def __init__(self, config: Config | None = None):
         self.config = config or Config.from_env()
         self.registry = Registry(self.config.registry_path)
-        self.catalog = ModelCatalog(
-            self.config.model_config_path, fallback_model=self.config.llm_model
-        )
         self._lock = threading.RLock()
         self._jobs: dict[str, UploadJob] = {}
         self._chats: dict[str, ChatHandle] = {}
@@ -239,7 +211,7 @@ class WebApplication:
     def _collection_config(self, name: str) -> Config:
         return replace(self.config, dataset_name=name)
 
-    def _configured_model_options(self) -> list[ModelOption]:
+    def _remote_model_options(self) -> list[ModelOption]:
         async def load() -> list[dict[str, Any]]:
             adapter = RAGFlowAdapter(
                 self.config.base_url,
@@ -253,44 +225,17 @@ class WebApplication:
 
         try:
             remote_models = asyncio.run(load())
+            return remote_model_options(remote_models)
+        except WebError:
+            raise
         except Exception as exc:
             raise WebError(502, f"RAGFlow model list failed: {exc}") from exc
-        configured = (
-            set().union(*(_remote_model_keys(item) for item in remote_models))
-            if remote_models
-            else set()
-        )
-        return [
-            option
-            for option in self.catalog.options()
-            if option.ragflow_model in configured
-        ]
+
+    def _configured_model_options(self) -> list[ModelOption]:
+        return self._remote_model_options()
 
     def _available_models(self) -> list[tuple[ModelOption, bool]]:
-        async def load() -> list[dict[str, Any]]:
-            adapter = RAGFlowAdapter(
-                self.config.base_url,
-                self.config.api_key,
-                timeout=self.config.request_timeout,
-            )
-            try:
-                return await adapter.list_chat_models()
-            finally:
-                await adapter.aclose()
-
-        try:
-            remote_models = asyncio.run(load())
-        except Exception as exc:
-            raise WebError(502, f"RAGFlow model list failed: {exc}") from exc
-        configured = (
-            set().union(*(_remote_model_keys(item) for item in remote_models))
-            if remote_models
-            else set()
-        )
-        return [
-            (option, option.ragflow_model in configured)
-            for option in self.catalog.options()
-        ]
+        return [(option, True) for option in self._remote_model_options()]
 
     def models(self) -> list[dict[str, Any]]:
         try:

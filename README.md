@@ -67,7 +67,6 @@ Die übrigen Variablen stehen vollständig in [`.env.example`](.env.example). Di
 | `RAGFLOW_PARSE_TIMEOUT` | Parsing-Timeout | `1800` Sekunden |
 | `RAGFLOW_GRAPH_TIMEOUT` | GraphRAG-Timeout | `1800` Sekunden |
 | `RAGFLOW_CITATION_THRESHOLD` | Mindestscore für Text-Matching | `0.60` |
-| `DEVAL_MODEL_CONFIG` | Modellkatalog des Webchats | `config/models.json` |
 | `DEVAL_RAGFLOW_STATELESS_CHAT` | RAGFlow-Sessions/Verlauf deaktivieren | `true` |
 | `RUN_LIVE_RAGFLOW_TESTS` | Live-Tests explizit aktivieren | `false` |
 
@@ -105,15 +104,9 @@ Ollama ist für diesen Ablauf nicht erforderlich und wird nicht gestartet.
    - Chatmodelle: die tatsächlich verfügbaren Modell-IDs, z. B. `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`
 4. Für jedes Modell den Typ **Chat** aktivieren und die Provider-Konfiguration testen.
 5. Unter **Avatar → API** einen RAGFlow-API-Key erzeugen und als `RAGFLOW_API_KEY` in der Root-`.env` eintragen.
-6. `RAGFLOW_LLM_MODEL` auf den exakten von RAGFlow gelieferten Modellwert setzen. In diesem Repository sind die Modellkatalogwerte beispielsweise:
+6. `RAGFLOW_LLM_MODEL` auf den exakten von RAGFlow gelieferten Modellwert setzen. Dieser Wert wird für CLI und GraphRAG verwendet. Für den Webchat ist keine separate Modellliste nötig: DEval zeigt automatisch alle Chatmodelle an, die der aktuelle RAGFlow-Tenant über `GET /api/v1/models?type=chat` bereitstellt.
 
-   ```text
-   gpt-5.6-luna@codex@OpenAI
-   gpt-5.6-sol@codex@OpenAI
-   gpt-5.6-terra@codex@OpenAI
-   ```
-
-Der Modellwert ist eine RAGFlow-Referenz auf **Modell, Provider-Instanz und Factory**. Wenn das Gateway einen anderen Instanznamen oder eine andere Factory verwendet, muss der Wert entsprechend angepasst werden. `RAGFLOW_API_KEY` und der externe Provider-Key sind zwei verschiedene Zugangsdaten.
+Der Modellwert ist eine RAGFlow-Referenz auf **Modell, Provider-Instanz und Factory**. Wenn das Gateway einen anderen Instanznamen oder eine andere Factory verwendet, wird das Modell automatisch mit der aktuellen RAGFlow-Konfiguration übernommen. `RAGFLOW_API_KEY` und der externe Provider-Key sind zwei verschiedene Zugangsdaten.
 
 Der TEI-Service für `BAAI/bge-small-en-v1.5` ist Teil des offiziellen Compose-Stacks und stellt nur Embeddings bereit. Er ersetzt keine Chat-/GraphRAG-Inferenz.
 
