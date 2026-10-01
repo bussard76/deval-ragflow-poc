@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -183,19 +184,39 @@ class RAGFlowAdapter:
         timeout: float | None = None,
         require_code: bool = True,
     ) -> dict[str, Any]:
-        try:
-            response = await self._client.request(
-                method,
-                self._url(path),
-                params=params,
-                json=json_body,
-                files=files,
-                timeout=self.timeout if timeout is None else timeout,
-            )
-        except Exception as exc:
-            if isinstance(exc, AdapterError):
-                raise
-            raise AdapterError(f"RAGFlow request failed: {type(exc).__name__}: {exc}")
+        if httpx is None:
+            raise AdapterError("httpx is required; install the project dependencies")
+        attempts = 3 if method.upper() in {"GET", "HEAD"} else 1
+        retryable = (
+            httpx.RemoteProtocolError,
+            httpx.ConnectError,
+            httpx.ReadError,
+            httpx.ReadTimeout,
+        )
+        response: Any = None
+        for attempt in range(attempts):
+            try:
+                response = await self._client.request(
+                    method,
+                    self._url(path),
+                    params=params,
+                    json=json_body,
+                    files=files,
+                    timeout=self.timeout if timeout is None else timeout,
+                )
+                break
+            except Exception as exc:
+                if isinstance(exc, AdapterError):
+                    raise
+                if attempt + 1 < attempts and isinstance(exc, retryable):
+                    await asyncio.sleep(0.25 * (attempt + 1))
+                    continue
+                raise AdapterError(
+                    f"RAGFlow request failed ({method.upper()} {path}): "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+        if response is None:
+            raise AdapterError(f"RAGFlow request failed ({method.upper()} {path})")
         try:
             payload = response.json()
         except (ValueError, json.JSONDecodeError):

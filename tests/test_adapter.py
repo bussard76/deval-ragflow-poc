@@ -420,6 +420,49 @@ def test_graph_progress_is_running_until_explicit_completion():
     run(exercise())
 
 
+def test_get_retries_remote_protocol_error():
+    calls = 0
+
+    def handler(request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.RemoteProtocolError("server disconnected", request=request)
+        return httpx.Response(
+            200,
+            json={"code": 0, "data": {"id": "task", "progress": 0.5}},
+        )
+
+    async def exercise():
+        adapter = RAGFlowAdapter(transport=httpx.MockTransport(handler))
+        try:
+            status = await adapter.graph_status("dataset")
+            assert status.state == "RUNNING"
+            assert calls == 2
+        finally:
+            await adapter.aclose()
+
+    run(exercise())
+
+
+def test_transport_error_includes_request_context():
+    def handler(request):
+        raise httpx.RemoteProtocolError("server disconnected", request=request)
+
+    async def exercise():
+        adapter = RAGFlowAdapter(transport=httpx.MockTransport(handler))
+        try:
+            with pytest.raises(
+                AdapterError,
+                match=r"GET /datasets/dataset/index.*RemoteProtocolError",
+            ):
+                await adapter.graph_status("dataset")
+        finally:
+            await adapter.aclose()
+
+    run(exercise())
+
+
 def test_business_code_and_safe_delete_fail_closed():
     def business(_):
         return httpx.Response(200, json={"code": 101, "message": "bad request"})
