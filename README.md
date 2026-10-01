@@ -142,7 +142,7 @@ cd frontend
 DEVAL_API_URL=http://127.0.0.1:8790 ./node_modules/.bin/vite --host 127.0.0.1
 ```
 
-Die Vite-Variable `DEVAL_API_URL` ist wichtig, wenn das Backend auf Port `8790` läuft. Ohne sie verwendet der Vite-Proxy den Fallback-Port `8787`.
+Die Vite-Variable `DEVAL_API_URL` ist wichtig, wenn das Backend auf Port `8790` läuft. Ohne sie verwendet der Vite-Proxy den Fallback-Port `8787`. Die Ansicht **RAGFlow-Backend** im oberen Umschalter bindet standardmäßig `http://127.0.0.1` ein; eine andere RAGFlow-Weboberfläche lässt sich über `VITE_RAGFLOW_WEB_URL` setzen.
 
 ## URLs und Ports
 
@@ -167,7 +167,7 @@ curl -i http://127.0.0.1:8790/api/health
 1. Frontend unter <http://127.0.0.1:5173> öffnen.
 2. Eine Sammlung anlegen oder auswählen.
 3. Neben der Sammlung ein oder mehrere PDFs hochladen.
-4. Warten, bis Parsing und GraphRAG abgeschlossen sind und der Status **GraphRAG aktuell** bzw. **GraphRAG bereit** anzeigt.
+4. Warten, bis die Dokumente verarbeitet sind. Der Chat kann danach bereits mit den verarbeiteten Dokumenten verwendet werden; ein laufender GraphRAG-Aufbau läuft unabhängig im Hintergrund.
 5. Ein konfiguriertes externes Chatmodell auswählen.
 6. Eine Frage stellen. Die Quellen erscheinen neben den relevanten Aussagen.
 7. Mit `+` im Chatkopf beliebig viele Chats je Sammlung im Browser anlegen und zwischen ihnen wechseln.

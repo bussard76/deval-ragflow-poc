@@ -41,6 +41,9 @@ interface StoredChatState {
 }
 
 const CHAT_STORAGE_PREFIX = "deval-webchat:v1:"
+const RAGFLOW_WEB_URL = (
+  import.meta.env.VITE_RAGFLOW_WEB_URL ?? "http://127.0.0.1"
+).replace(/\/+$/, "")
 // Keep the pre-selector behavior by default; users can opt into either or both.
 const DEFAULT_CROSS_LANGUAGES: CrossLanguage[] = []
 
@@ -329,6 +332,10 @@ function StatusBadge({ status }: { status: GraphRAGStatus }) {
       label: "GraphRAG wird aktualisiert…",
       color: "text-blue-700 bg-blue-50",
     },
+    outdated: {
+      label: "GraphRAG nicht aktuell",
+      color: "text-amber-700 bg-amber-50",
+    },
     ready: {
       label: "GraphRAG aktuell",
       color: "text-emerald-700 bg-emerald-50",
@@ -350,6 +357,46 @@ function StatusBadge({ status }: { status: GraphRAGStatus }) {
       ) : null}
       {label}
     </span>
+  )
+}
+
+function RagFlowPanel() {
+  const [loaded, setLoaded] = useState(false)
+
+  return (
+    <section className="flex min-h-0 flex-1 flex-col bg-[var(--background)]">
+      <div className="flex shrink-0 items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-5 py-2.5">
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-medium">RAGFlow-Backend</p>
+          <p className="truncate font-mono text-[10px] text-[var(--muted-foreground)]">
+            {RAGFLOW_WEB_URL}
+          </p>
+        </div>
+        <a
+          href={RAGFLOW_WEB_URL}
+          target="_blank"
+          rel="noreferrer"
+          className="shrink-0 rounded border border-[var(--border)] px-2.5 py-1.5 text-[12px] text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)]"
+        >
+          In neuem Tab öffnen ↗
+        </a>
+      </div>
+      <div className="relative min-h-0 flex-1">
+        {!loaded && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center gap-2 bg-[var(--background)] text-[13px] text-[var(--muted-foreground)]">
+            <IconSpinner size={15} />
+            RAGFlow wird geladen…
+          </div>
+        )}
+        <iframe
+          title="RAGFlow-Backend"
+          src={RAGFLOW_WEB_URL}
+          onLoad={() => setLoaded(true)}
+          allow="clipboard-read; clipboard-write"
+          className="h-full w-full border-0"
+        />
+      </div>
+    </section>
   )
 }
 
@@ -644,8 +691,8 @@ function ChatPanel({
   const bottomRef = useRef<HTMLDivElement>(null)
   const conversationId = useRef(crypto.randomUUID())
   const skipChatPersistRef = useRef(false)
-  const graphUpdating =
-    collection.status === "processing" || collection.status === "building"
+  const graphUpdating = collection.status === "building"
+  const documentsProcessing = collection.status === "processing"
 
   const chat =
     chatState.chats.find((item) => item.id === chatState.activeChatId) ??
@@ -731,7 +778,8 @@ function ChatPanel({
 
   async function sendMessage() {
     const question = input.trim()
-    if (!question || !selectedModel || loading || graphUpdating || !chat) return
+    if (!question || !selectedModel || loading || documentsProcessing || !chat)
+      return
     const chatId = activeChatId
     const userMsg: Message = {
       id: crypto.randomUUID(),
@@ -800,12 +848,14 @@ function ChatPanel({
           <div className="flex items-center gap-2 mt-1">
             <StatusBadge status={collection.status} />
           </div>
-          {graphUpdating && collection.documents.length > 0 && (
-            <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
-              Die Sammlung wird aktualisiert. Der Chat ist pausiert, bis der
-              GraphRAG wieder aktuell ist.
-            </p>
-          )}
+          {(documentsProcessing || graphUpdating) &&
+            collection.documents.length > 0 && (
+              <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
+                {documentsProcessing
+                  ? "Dokumente werden verarbeitet. Der Chat ist vorübergehend pausiert."
+                  : "GraphRAG wird aktualisiert. Der Chat bleibt mit den bereits verarbeiteten Dokumenten verfügbar."}
+              </p>
+            )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <label
@@ -927,19 +977,19 @@ function ChatPanel({
             }}
             placeholder={
               selectedModel
-                ? graphUpdating
-                  ? "GraphRAG wird aktualisiert…"
+                ? documentsProcessing
+                  ? "Dokumente werden verarbeitet…"
                   : "Frage stellen oder Zusammenfassung anfordern…"
                 : "Erst Modell auswählen…"
             }
-            disabled={!selectedModel || graphUpdating}
+            disabled={!selectedModel || documentsProcessing}
             rows={2}
             className="flex-1 resize-none rounded border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-[14px] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--accent)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           />
           <button
             onClick={sendMessage}
             disabled={
-              !input.trim() || !selectedModel || loading || graphUpdating
+              !input.trim() || !selectedModel || loading || documentsProcessing
             }
             className="px-3 py-2 rounded bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--accent)] transition-colors self-end"
           >
@@ -962,7 +1012,7 @@ function ChatPanel({
                   type="checkbox"
                   checked={crossLanguages.includes(language)}
                   onChange={() => toggleCrossLanguage(language)}
-                  disabled={loading || graphUpdating}
+                  disabled={loading || documentsProcessing}
                   className="accent-[var(--accent)]"
                 />
                 {language === "German" ? "Deutsch" : "English"}
@@ -988,7 +1038,7 @@ function ChatPanel({
                 modelId: found?.id ?? null,
               }))
             }}
-            disabled={messages.length > 0 || loading || graphUpdating}
+            disabled={messages.length > 0 || loading || documentsProcessing}
             className="w-52 shrink-0 rounded border border-[var(--border)] bg-[var(--card)] px-2 py-1.5 text-[13px] text-[var(--foreground)] focus:outline-none focus:border-[var(--accent)] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
           >
             <option value="">— Modell wählen —</option>
@@ -1175,6 +1225,7 @@ function SourcesPanel({ selection }: { selection: CitationSelection | null }) {
 // ── Main App ───────────────────────────────────────────────────────────────
 
 export default function App() {
+  const [view, setView] = useState<"chat" | "ragflow">("chat")
   const [collections, setCollections] = useState<Collection[]>([])
   const [models, setModels] = useState<Model[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -1403,12 +1454,12 @@ export default function App() {
     }
   }
 
-  const graphUpdating =
-    selectedCollection?.status === "processing" ||
-    selectedCollection?.status === "building"
+  const graphUpdating = selectedCollection?.status === "building"
   const showChat =
     selectedCollection?.status === "ready" ||
-    (Boolean(selectedCollection?.documents.length) && graphUpdating)
+    selectedCollection?.status === "outdated" ||
+    (Boolean(selectedCollection?.documents.length) &&
+      (selectedCollection?.status === "processing" || graphUpdating))
 
   return (
     <div className="h-full flex flex-col">
@@ -1421,6 +1472,35 @@ export default function App() {
           <span className="text-[var(--border)]">/</span>
           <span className="text-[14px] font-medium">Webchat</span>
         </div>
+        <nav
+          className="ml-4 flex items-center gap-1 rounded border border-[var(--border)] p-0.5"
+          aria-label="Ansicht auswählen"
+        >
+          <button
+            type="button"
+            onClick={() => setView("chat")}
+            aria-pressed={view === "chat"}
+            className={`rounded px-2.5 py-1 text-[11px] transition-colors ${
+              view === "chat"
+                ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
+                : "text-[var(--muted-foreground)] hover:bg-[var(--secondary)]"
+            }`}
+          >
+            DEval-Chat
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("ragflow")}
+            aria-pressed={view === "ragflow"}
+            className={`rounded px-2.5 py-1 text-[11px] transition-colors ${
+              view === "ragflow"
+                ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
+                : "text-[var(--muted-foreground)] hover:bg-[var(--secondary)]"
+            }`}
+          >
+            RAGFlow-Backend
+          </button>
+        </nav>
         {error && (
           <span className="ml-auto max-w-[50%] truncate font-mono text-[10px] text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded">
             {error}
@@ -1428,12 +1508,15 @@ export default function App() {
         )}
       </header>
 
-      <div
-        ref={layoutRef}
-        className={`flex-1 flex overflow-hidden ${
-          resizing ? "select-none" : ""
-        }`}
-      >
+      {view === "ragflow" ? (
+        <RagFlowPanel />
+      ) : (
+        <div
+          ref={layoutRef}
+          className={`flex-1 flex overflow-hidden ${
+            resizing ? "select-none" : ""
+          }`}
+        >
         {/* Sidebar */}
         <aside className="w-56 shrink-0 border-r border-[var(--border)] flex flex-col bg-[var(--card)]">
           <div className="px-4 py-3 border-b border-[var(--border)] flex items-center justify-between">
@@ -1548,9 +1631,11 @@ export default function App() {
                             ? `${col.documents.length} Dok.`
                             : col.status === "idle"
                               ? "leer"
-                              : col.status === "error"
-                                ? "Fehler"
-                                : "lädt…"}
+                              : col.status === "outdated"
+                                ? "nicht aktuell"
+                                : col.status === "error"
+                                  ? "Fehler"
+                                  : "lädt…"}
                         </div>
                       </div>
                     </button>
@@ -1679,13 +1764,14 @@ export default function App() {
         </div>
 
         {/* Sources panel */}
-        <div
-          className="shrink-0 overflow-hidden"
-          style={{ width: `${sourceWidth}px` }}
-        >
-          <SourcesPanel selection={selectedCitation} />
+          <div
+            className="shrink-0 overflow-hidden"
+            style={{ width: `${sourceWidth}px` }}
+          >
+            <SourcesPanel selection={selectedCitation} />
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }

@@ -114,7 +114,7 @@ pnpm install
 DEVAL_API_URL=http://127.0.0.1:8790 pnpm dev --host 127.0.0.1
 ```
 
-Die UI ist anschließend unter `http://localhost:5173` erreichbar. Sammlung anlegen, mehrere PDFs auswählen und den Status bis **GraphRAG bereit** verfolgen. Die Modellliste wird direkt aus den im aktuellen RAGFlow-Tenant verfügbaren Chatmodellen geladen; eine lokale Modellkonfiguration ist nicht erforderlich. Erst nach dem erfolgreichen GraphRAG-Aufbau ist der Chat freigeschaltet. Zitate werden nach der Chatantwort separat über `/retrieval` aufgelöst. Der rechte Quellenbereich ist weiterhin nur ein gekennzeichneter Prototyp-Mock.
+Die UI ist anschließend unter `http://localhost:5173` erreichbar. Sammlung anlegen und mehrere PDFs auswählen. Nach abgeschlossener Dokumentverarbeitung ist der Chat mit den verarbeiteten Dokumenten verfügbar; ein laufender GraphRAG-Aufbau wird separat angezeigt und blockiert den Chat nicht. Die Modellliste wird direkt aus den im aktuellen RAGFlow-Tenant verfügbaren Chatmodellen geladen; eine lokale Modellkonfiguration ist nicht erforderlich. Zitate werden nach der Chatantwort separat über `/retrieval` aufgelöst. Der rechte Quellenbereich ist weiterhin nur ein gekennzeichneter Prototyp-Mock.
 
 Die für den Webchat verwendete Web-API läuft hier auf `http://127.0.0.1:8790` und stellt bereit:
 

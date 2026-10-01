@@ -1,4 +1,4 @@
-export type GraphRAGStatus = "idle" | "processing" | "building" | "ready" | "error"
+export type GraphRAGStatus = "idle" | "processing" | "building" | "outdated" | "ready" | "error"
 export type GraphFreshness = "empty" | "current" | "updating" | "outdated" | "error"
 export const CROSS_LANGUAGE_OPTIONS = ["German", "English"] as const
 export type CrossLanguage = typeof CROSS_LANGUAGE_OPTIONS[number]

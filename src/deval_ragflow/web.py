@@ -22,7 +22,10 @@ from .citations import CitationResolver
 from .config import Config
 from .errors import DevalError
 from .ingestion import IngestionService
-from .model_catalog import ModelOption, remote_model_options  # type: ignore[import-not-found]
+from .model_catalog import (  # type: ignore[import-not-found]
+    ModelOption,
+    remote_model_options,
+)
 from .registry import Registry
 
 MAX_NAME_LENGTH = 160
@@ -290,7 +293,9 @@ class WebApplication:
             job_state = job.state if job is not None else ""
             job_error = job.error if job is not None else ""
 
-        remote_update = remote_state in {"UNSTART", "RUNNING", "SCHEDULE"}
+        remote_update = remote_state in {"RUNNING", "SCHEDULE"} or (
+            remote_state == "UNSTART" and bool(graph.get("remote_task_id"))
+        )
         unknown_task = remote_state == "UNKNOWN" and bool(graph.get("remote_task_id"))
         if job_state in {"processing", "building"} or remote_update or unknown_task:
             state = "updating"
@@ -336,7 +341,7 @@ class WebApplication:
         if graph_state == "updating":
             return "processing" if job_state == "processing" else "building"
         if graph_state == "outdated":
-            return "building"
+            return "outdated"
         return "processing"
 
     def _collection_view(self, scope: str) -> dict[str, Any]:
@@ -1005,9 +1010,9 @@ class WebApplication:
         dataset = self.registry.get_dataset(collection_scope)
         if dataset is None:
             raise WebError(404, "collection not found")
-        graph = self.registry.get_index(collection_scope, "graph")
-        if graph is None or graph.get("state") != "DONE":
-            raise WebError(409, "GraphRAG is not ready for this collection")
+        mappings = self.registry.mappings_for_dataset(collection_scope)
+        if not mappings or any(mapping.state != "DONE" for mapping in mappings):
+            raise WebError(409, "documents are not ready for this collection")
         question = question.strip()
         if not question:
             raise WebError(400, "question must not be empty")

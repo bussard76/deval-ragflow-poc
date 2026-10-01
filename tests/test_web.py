@@ -480,9 +480,7 @@ def test_models_are_loaded_from_ragflow_without_local_configuration(
             "Test · local",
             "OpenAI · cloud",
         }
-        assert app._model("second-model").ragflow_model == (
-            "second-model@cloud@OpenAI"
-        )
+        assert app._model("second-model").ragflow_model == ("second-model@cloud@OpenAI")
     finally:
         app.close()
 
@@ -500,13 +498,43 @@ def test_cross_language_validation_rejects_unsupported_api_values(config):
         app.close()
 
 
-def test_chat_requires_ready_graph(config):
+def test_chat_requires_parsed_documents(config):
     app = WebApplication(config)
     try:
         app.registry.upsert_dataset("test-dataset", "remote", "test-dataset")
-        with pytest.raises(WebError, match="GraphRAG is not ready"):
-            app.answer(
-                "test-dataset", "missing-model", "question", "conversation"
+        with pytest.raises(WebError, match="documents are not ready"):
+            app.answer("test-dataset", "missing-model", "question", "conversation")
+    finally:
+        app.close()
+
+
+def test_chat_works_before_graph_build_finishes(config, monkeypatch):
+    monkeypatch.setattr("deval_ragflow.web.RAGFlowAdapter", FakeAdapter)
+    app = WebApplication(replace(config, llm_model="model@local@Test"))
+    try:
+        app.registry.upsert_dataset("test-dataset", "remote-dataset", "test-dataset")
+        app.registry.save_extraction(
+            DocumentExtraction(
+                "document",
+                "version",
+                "a" * 64,
+                "golden.pdf",
+                "extracted",
+                1,
+                1,
+                "",
+                [],
             )
+        )
+        app.registry.reserve_mapping("test-dataset", "version", "golden.pdf")
+        app.registry.set_mapping_remote("test-dataset", "version", "remote-doc")
+        app.registry.set_mapping_state("test-dataset", "version", "DONE")
+        app.registry.upsert_index("test-dataset", "graph", state="UNSTART")
+
+        view = app._collection_view("test-dataset")
+        assert view["status"] == "outdated"
+        assert view["graph"]["state"] == "outdated"
+        response = app.answer("test-dataset", "model", "question", "conversation")
+        assert response["answer"] == "Eine echte Antwort [ID:0]."
     finally:
         app.close()
