@@ -168,6 +168,75 @@ curl -i http://127.0.0.1:9381/api/v1/admin/ping
 curl -i http://127.0.0.1:8790/api/health
 ```
 
+## Deployment hinter Nginx
+
+Für einen Server mit öffentlichem HTTPS sollten nur Nginx-Ports erreichbar sein. RAGFlow und das DEval-Backend bleiben an `127.0.0.1` gebunden. Der RAGFlow-Stack reserviert standardmäßig Host-Port `80`; wenn Nginx selbst Port `80` benötigt, die internen Webports beim Start verschieben:
+
+```bash
+export RAGFLOW_WEB_HTTP_PORT=127.0.0.1:8080
+export RAGFLOW_WEB_HTTPS_PORT=127.0.0.1:8443
+./scripts/ragflow-compose.sh verify
+./scripts/ragflow-compose.sh up
+./scripts/ragflow-compose.sh wait
+```
+
+Das Frontend wird für den Produktivbetrieb statisch gebaut. `DEVAL_API_URL` wird dabei nicht benötigt, weil Nginx `/api/` unter derselben Origin weiterleitet:
+
+```bash
+cd frontend
+pnpm install
+VITE_RAGFLOW_WEB_URL=https://ragflow.example.org pnpm build
+```
+
+Beispiel für zwei Nginx-Virtual-Hosts (`deval.example.org` für DEval und `ragflow.example.org` für die eingebettete RAGFlow-Weboberfläche):
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name deval.example.org;
+
+    # ssl_certificate ...;
+    # ssl_certificate_key ...;
+    root /srv/deval/frontend/dist;
+    index index.html;
+    client_max_body_size 64m;
+
+    location /api/ {
+        # Kein abschließender Slash: /api/... bleibt beim Backend erhalten.
+        proxy_pass http://127.0.0.1:8790;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 1800s;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name ragflow.example.org;
+
+    # ssl_certificate ...;
+    # ssl_certificate_key ...;
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 1800s;
+    }
+}
+```
+
+Danach das DEval-Backend auf `127.0.0.1:8790` starten und `https://deval.example.org` öffnen. Die Ports `8790`, `9380` und `9381` sollten nicht öffentlich exponiert werden. Für eine rein lokale Installation bleiben die oben dokumentierten Ports `5173`, `8790` und `9380` ausreichend.
+
 ## Verwendung des Webchats
 
 1. Frontend unter <http://127.0.0.1:5173> öffnen.
