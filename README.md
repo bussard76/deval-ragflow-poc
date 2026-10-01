@@ -10,6 +10,12 @@ DEval speichert Chatverläufe nicht serverseitig. Jeder Chat, das ausgewählte M
 
 RAGFlow benötigt für seinen OpenAI-kompatiblen Endpunkt weiterhin ein technisches Chat-Assistant-Objekt. Dieses enthält nur die Verknüpfung von Wissensdatenbank, Modell und Prompt – nicht den Gesprächsverlauf. Die eigentlichen lokalen Chats bleiben im Browser und können dort getrennt verwaltet werden.
 
+## Screenshots
+
+| DEval-Webchat | Eingebettete RAGFlow-Weboberfläche |
+| --- | --- |
+| ![DEval-Webchat mit Sammlungen, Chat und Quellenbereich](docs/screenshots/deval-chat.png) | ![RAGFlow-Login innerhalb des DEval-Frontends](docs/screenshots/ragflow-backend.png) |
+
 ## Schnellstart
 
 ### Voraussetzungen
