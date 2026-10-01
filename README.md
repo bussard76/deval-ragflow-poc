@@ -16,6 +16,15 @@ RAGFlow benötigt für seinen OpenAI-kompatiblen Endpunkt weiterhin ein technisc
 | --- | --- |
 | ![DEval-Webchat mit Sammlungen, Chat und Quellenbereich](docs/screenshots/deval-chat.png) | ![RAGFlow-Login innerhalb des DEval-Frontends](docs/screenshots/ragflow-backend.png) |
 
+### Demo-Video
+
+<video controls preload="metadata" poster="./docs/media/deval-demo-poster.jpg" width="960">
+  <source src="./docs/media/deval-demo.mp4" type="video/mp4">
+  Dein Browser unterstützt das eingebettete Video nicht. <a href="docs/media/deval-demo.mp4">Video direkt öffnen</a>.
+</video>
+
+[▶️ Video in GitHub öffnen und bei Bedarf auf Vollbild schalten](docs/media/deval-demo.mp4)
+
 ## Schnellstart
 
 ### Voraussetzungen
