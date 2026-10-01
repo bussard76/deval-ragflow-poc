@@ -178,7 +178,8 @@ curl -i http://127.0.0.1:8790/api/health
 6. Eine Frage stellen. Die Quellen erscheinen neben den relevanten Aussagen.
 7. Mit `+` im Chatkopf beliebig viele Chats je Sammlung im Browser anlegen und zwischen ihnen wechseln.
 8. Dokumente können in der aufklappbaren Sammlung gelöscht werden. Danach wird GraphRAG erneut aktualisiert.
-9. Unter **Suche in** lassen sich Deutsch und English für die sprachübergreifende RAGFlow-Suche je Browser-Chat an- oder abwählen.
+9. Eine ganze Sammlung lässt sich über das `×` neben ihrem Namen löschen. Dabei werden das RAGFlow-Dataset und die lokale Provenienz nach einer Bestätigung entfernt.
+10. Unter **Suche in** lassen sich Deutsch und English für die sprachübergreifende RAGFlow-Suche je Browser-Chat an- oder abwählen.
 
 Die Sammlung ist im linken Bereich als Ordner dargestellt. Dokumente bleiben dort sichtbar und auswählbar. Chatverläufe und Modellwahl bleiben je Sammlung/Chat ausschließlich im Browser. Der Dateiname im Quellenbereich öffnet das vollständige PDF in einem neuen Tab; die Seitenvorschau und Provenienz bleiben lokal.
 

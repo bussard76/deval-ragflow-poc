@@ -7,6 +7,7 @@ import {
   type GraphRAGStatus,
   type Model,
   createCollection,
+  deleteCollection,
   deleteCollectionDocument,
   getCollection,
   listCollections,
@@ -174,6 +175,15 @@ function writeStoredChats(collectionId: string, state: StoredChatState) {
       chatStorageKey(collectionId),
       JSON.stringify(state),
     )
+  } catch {
+    // Private browsing and full storage must not break the chat.
+  }
+}
+
+function removeStoredChats(collectionId: string) {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.removeItem(chatStorageKey(collectionId))
   } catch {
     // Private browsing and full storage must not break the chat.
   }
@@ -1239,6 +1249,9 @@ export default function App() {
   const [uploadTargetId, setUploadTargetId] = useState<string | null>(null)
   const [uploadingCollectionId, setUploadingCollectionId] =
     useState<string | null>(null)
+  const [deletingCollectionId, setDeletingCollectionId] = useState<string | null>(
+    null,
+  )
   const [deletingDocumentKey, setDeletingDocumentKey] = useState<string | null>(
     null,
   )
@@ -1421,6 +1434,46 @@ export default function App() {
     }
   }
 
+  async function handleDeleteCollection(
+    collectionId: string,
+    collectionName: string,
+  ) {
+    if (
+      !window.confirm(
+        `Sammlung „${collectionName}“ inklusive aller RAGFlow-Dokumente löschen?`,
+      )
+    ) {
+      return
+    }
+    setError("")
+    setDeletingCollectionId(collectionId)
+    setSelectedCitation(null)
+    try {
+      await deleteCollection(collectionId)
+      removeStoredChats(collectionId)
+      const nextCollections = collections.filter(
+        (collection) => collection.id !== collectionId,
+      )
+      setCollections(nextCollections)
+      setExpandedCollections((current) => {
+        const next = new Set(current)
+        next.delete(collectionId)
+        return next
+      })
+      if (selectedId === collectionId) {
+        setSelectedId(nextCollections[0]?.id ?? null)
+      }
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "Sammlung konnte nicht gelöscht werden",
+      )
+    } finally {
+      setDeletingCollectionId(null)
+    }
+  }
+
   async function handleDeleteDocument(
     collectionId: string,
     documentId: string,
@@ -1582,6 +1635,7 @@ export default function App() {
               const busy =
                 col.status === "processing" || col.status === "building"
               const uploading = uploadingCollectionId === col.id
+              const deleting = deletingCollectionId === col.id
               const selected = selectedId === col.id
               return (
                 <div
@@ -1642,15 +1696,29 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => openCollectionUpload(col.id)}
-                      disabled={busy || uploading}
+                      disabled={busy || uploading || deleting}
                       aria-label={`Dokumente zu ${col.name} hinzufügen`}
                       title="Dokumente hinzufügen"
-                      className="mr-2 mt-2 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--muted-foreground)] hover:bg-black/10 hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
+                      className="mr-1 mt-2 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--muted-foreground)] hover:bg-black/10 hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       {uploading ? (
                         <IconSpinner size={13} />
                       ) : (
                         <IconPlus size={14} />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCollection(col.id, col.name)}
+                      disabled={busy || uploading || deleting}
+                      aria-label={`${col.name} löschen`}
+                      title="Sammlung löschen"
+                      className="mr-1 mt-2 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded text-[var(--muted-foreground)] hover:bg-red-500/15 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {deleting ? (
+                        <IconSpinner size={12} />
+                      ) : (
+                        <span aria-hidden="true">×</span>
                       )}
                     </button>
                   </div>

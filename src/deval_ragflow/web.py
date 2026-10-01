@@ -429,6 +429,61 @@ class WebApplication:
             ) from exc
         return self._collection_view(dataset.dataset_scope)
 
+    def delete_collection(self, scope: str) -> dict[str, Any]:
+        dataset = self.registry.get_dataset(scope)
+        if dataset is None:
+            raise WebError(404, "collection not found")
+        if not dataset.owned:
+            raise WebError(409, "collection is not owned by this DEval instance")
+        with self._lock:
+            current = self._jobs.get(scope)
+            if current is not None and current.state in {"processing", "building"}:
+                raise WebError(409, "collection is still being updated")
+        if self._graph_view(scope)["state"] == "updating":
+            raise WebError(409, "collection is still being updated")
+        config = self._collection_config(dataset.name)
+
+        async def run() -> str:
+            adapter = RAGFlowAdapter(
+                config.base_url, config.api_key, timeout=config.request_timeout
+            )
+            try:
+                remote_id = dataset.remote_dataset_id
+                matches = [
+                    item
+                    for item in await adapter.list_datasets()
+                    if str(item.get("name", "")).casefold() == dataset.name.casefold()
+                ]
+                if len(matches) > 1:
+                    raise DevalError(
+                        f"more than one RAGFlow dataset has the name {dataset.name!r}"
+                    )
+                if matches and matches[0].get("id"):
+                    # Resolve a stale local id by the collection name before
+                    # deleting; this also repairs the common tenant-reset case.
+                    remote_id = str(matches[0]["id"])
+                await adapter.delete_owned_dataset(remote_id, remote_id)
+                return remote_id
+            finally:
+                await adapter.aclose()
+
+        try:
+            remote_id = asyncio.run(run())
+        except WebError:
+            raise
+        except Exception as exc:
+            raise WebError(
+                502, f"could not delete collection from RAGFlow: {exc}"
+            ) from exc
+        self.registry.delete_dataset_rows(scope, dataset.remote_dataset_id)
+        with self._lock:
+            self._chats = {
+                key: value
+                for key, value in self._chats.items()
+                if value.collection_scope != scope
+            }
+        return {"deleted": scope, "remote_dataset_id": remote_id}
+
     def start_upload(
         self, scope: str, files: list[tuple[str, bytes]]
     ) -> dict[str, Any]:
@@ -1202,6 +1257,10 @@ class WebHandler(BaseHTTPRequestHandler):
             path = urlparse(self.path).path.rstrip("/") or "/"
             marker = "/documents/"
             prefix = "/api/collections/"
+            if path.startswith(prefix) and marker not in path[len(prefix) :]:
+                scope = unquote(path[len(prefix) :]).strip("/")
+                self._send(200, self.application.delete_collection(scope))
+                return
             if path.startswith(prefix) and marker in path[len(prefix) :]:
                 scope, version_uid = path[len(prefix) :].rsplit(marker, 1)
                 self._send(

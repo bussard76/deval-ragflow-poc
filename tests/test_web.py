@@ -38,6 +38,7 @@ class FakeAdapter:
         self.chat_completion_calls: list[dict[str, Any]] = []
         self.retrieve_calls: list[dict[str, object]] = []
         self.retrieve_questions: list[str] = []
+        self.deleted_dataset_ids: list[str] = []
         type(self).instances.append(self)
 
     async def aclose(self):
@@ -56,6 +57,14 @@ class FakeAdapter:
 
     async def ensure_dataset(self, name, **kwargs):
         return {"id": "remote-dataset", "name": name}
+
+    async def list_datasets(self):
+        return []
+
+    async def delete_owned_dataset(self, dataset_id, owned_dataset_id):
+        assert dataset_id == owned_dataset_id
+        self.deleted_dataset_ids.append(dataset_id)
+        return {"code": 0}
 
     async def find_document(self, *args, **kwargs):
         return None
@@ -359,6 +368,29 @@ def test_web_application_wires_collection_upload_graph_and_chat(monkeypatch, con
         app.close()
 
 
+def test_web_application_deletes_collection_and_resolves_stale_remote_id(
+    config, monkeypatch
+):
+    class ReboundFakeAdapter(FakeAdapter):
+        async def list_datasets(self):
+            return [{"id": "current-remote", "name": "Delete collection"}]
+
+    monkeypatch.setattr("deval_ragflow.web.RAGFlowAdapter", ReboundFakeAdapter)
+    app = WebApplication(config)
+    try:
+        app.create_collection("Delete collection")
+        deleted = app.delete_collection("Delete collection")
+        adapter = ReboundFakeAdapter.instances[-1]
+        assert deleted == {
+            "deleted": "Delete collection",
+            "remote_dataset_id": "current-remote",
+        }
+        assert adapter.deleted_dataset_ids == ["current-remote"]
+        assert app.registry.get_dataset("Delete collection") is None
+    finally:
+        app.close()
+
+
 def test_upload_accepts_completed_empty_graph(config, tmp_path, monkeypatch):
     monkeypatch.setattr("deval_ragflow.web.RAGFlowAdapter", FakeAdapter)
     monkeypatch.setattr(FakeAdapter, "empty_graph", True)
@@ -401,6 +433,12 @@ def test_http_api_exposes_health_and_models(config, monkeypatch):
         models = connection.getresponse()
         assert models.status == 200
         assert json.loads(models.read())["models"][0]["id"] == "model"
+
+        app.create_collection("Delete via HTTP")
+        connection.request("DELETE", "/api/collections/Delete%20via%20HTTP")
+        deleted = connection.getresponse()
+        assert deleted.status == 200
+        assert json.loads(deleted.read())["deleted"] == "Delete via HTTP"
     finally:
         connection.close()
         server.shutdown()

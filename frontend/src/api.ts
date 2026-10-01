@@ -118,6 +118,13 @@ export async function uploadCollection(
   })
 }
 
+export async function deleteCollection(id: string): Promise<void> {
+  await request<{ deleted: string }>(
+    `/collections/${encodeURIComponent(id)}`,
+    { method: "DELETE" },
+  )
+}
+
 export async function deleteCollectionDocument(
   collectionId: string,
   documentId: string,
