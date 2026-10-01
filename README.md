@@ -71,6 +71,7 @@ Die übrigen Variablen stehen vollständig in [`.env.example`](.env.example). Di
 | `RAGFLOW_REGISTRY_PATH` | lokale SQLite-Provenienz | `.data/registry.sqlite3` |
 | `RAGFLOW_REQUEST_TIMEOUT` | HTTP-Timeout | `30` Sekunden |
 | `RAGFLOW_PARSE_TIMEOUT` | Parsing-Timeout | `1800` Sekunden |
+| `RAGFLOW_UPLOAD_CONCURRENCY` | parallele Dokumentverarbeitung pro Upload | `5` (maximal `5`) |
 | `RAGFLOW_GRAPH_TIMEOUT` | GraphRAG-Timeout | `1800` Sekunden |
 | `RAGFLOW_CITATION_THRESHOLD` | Mindestscore für Text-Matching | `0.60` |
 | `DEVAL_RAGFLOW_STATELESS_CHAT` | RAGFlow-Sessions/Verlauf deaktivieren | `true` |
@@ -282,7 +283,7 @@ Wichtige Eigenschaften:
 
 - `document_uid` ist der SHA-256-Hash der PDF-Bytes.
 - Die lokale Registry liegt in `.data/registry.sqlite3` und enthält Provenienz, Seiten, Absätze, Bboxes und RAGFlow-Mappings.
-- Uploads laufen asynchron; das Frontend fragt Job- und GraphRAG-Status regelmäßig ab.
+- Uploads laufen asynchron; bis zu `RAGFLOW_UPLOAD_CONCURRENCY` (Standard: 5) Dokumente werden pro Job parallel an RAGFlow übergeben. Das Frontend fragt Job- und GraphRAG-Status regelmäßig ab.
 - Malformed, verschlüsselte, leere und reine Scan-PDFs werden lokal registriert, aber nicht automatisch hochgeladen.
 - Mixed-PDFs benötigen im CLI `--allow-mixed`; im Webchat wird die Verarbeitung entsprechend angezeigt.
 - Zitate werden nicht vom LLM geraten: Die Chatantwort und die Quellenauflösung sind getrennt. `CitationResolver` ordnet RAGFlow-Referenzen deterministisch lokalen Seiten und Absätzen zu.

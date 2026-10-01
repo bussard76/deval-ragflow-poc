@@ -1,9 +1,11 @@
+import asyncio
 import json
 import time
 from dataclasses import replace
 from http.client import HTTPConnection
 from pathlib import Path
 from threading import Thread
+from types import SimpleNamespace
 from typing import Any, ClassVar
 
 import pytest
@@ -364,6 +366,52 @@ def test_web_application_wires_collection_upload_graph_and_chat(monkeypatch, con
         assert after_delete["graph"]["state"] == "empty"
         assert adapter.chat_llm_model == "model@local@Test"
         assert adapter.retrieve_calls[-1].get("use_kg") is False
+    finally:
+        app.close()
+
+
+def test_web_application_uploads_documents_concurrently(config, monkeypatch):
+    active = 0
+    max_active = 0
+    started: list[str] = []
+
+    class ConcurrentService:
+        def __init__(self, config, registry, adapter):
+            pass
+
+        async def ingest(self, path, **kwargs):
+            nonlocal active, max_active
+            active += 1
+            max_active = max(max_active, active)
+            started.append(path.name)
+            await asyncio.sleep(0.03)
+            active -= 1
+            return SimpleNamespace(state="DONE")
+
+        async def build_graph(self, **kwargs):
+            return {"state": "EMPTY", "message": "no graph entities"}
+
+    monkeypatch.setattr("deval_ragflow.web.RAGFlowAdapter", FakeAdapter)
+    monkeypatch.setattr("deval_ragflow.web.IngestionService", ConcurrentService)
+    app = WebApplication(replace(config, upload_concurrency=2))
+    try:
+        app.create_collection("Concurrent collection")
+        pending = app.start_upload(
+            "Concurrent collection",
+            [("one.pdf", b"one"), ("two.pdf", b"two"), ("three.pdf", b"three")],
+        )
+        assert pending["status"] == "processing"
+        current = app._collection_view("Concurrent collection")
+        for _ in range(100):
+            current = app._collection_view("Concurrent collection")
+            job = current.get("job")
+            if job and job["completed"] == job["total"] and not job["error"]:
+                break
+            time.sleep(0.02)
+        else:
+            pytest.fail(f"upload did not complete: {current}")
+        assert max_active == 2
+        assert set(started) == {"one.pdf", "two.pdf", "three.pdf"}
     finally:
         app.close()
 

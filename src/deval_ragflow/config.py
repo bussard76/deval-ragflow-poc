@@ -65,6 +65,7 @@ class Config:
     parse_timeout: float = 1800.0
     cancel_timeout: float = 60.0
     poll_interval: float = 2.0
+    upload_concurrency: int = 5
     max_document_pages: int = 2000
     max_document_bytes: int = 50 * 1024 * 1024
     max_text_chars: int = 20 * 1000 * 1000
@@ -79,6 +80,10 @@ class Config:
         object.__setattr__(self, "base_url", normalize_base_url(self.base_url))
         if self.chunk_token_num <= 0:
             raise ConfigurationError("chunk_token_num must be positive")
+        if not 1 <= self.upload_concurrency <= 5:
+            raise ConfigurationError(
+                "RAGFLOW_UPLOAD_CONCURRENCY must be between 1 and 5"
+            )
         for name in (
             "request_timeout",
             "parse_timeout",
@@ -188,6 +193,7 @@ class Config:
             parse_timeout=number("RAGFLOW_PARSE_TIMEOUT", 1800),
             cancel_timeout=number("RAGFLOW_CANCEL_TIMEOUT", 60),
             poll_interval=number("RAGFLOW_POLL_INTERVAL", 2),
+            upload_concurrency=integer("RAGFLOW_UPLOAD_CONCURRENCY", 5),
             max_document_pages=integer("RAGFLOW_MAX_DOCUMENT_PAGES", 2000),
             max_document_bytes=integer("RAGFLOW_MAX_DOCUMENT_BYTES", 50 * 1024 * 1024),
             max_text_chars=integer("RAGFLOW_MAX_TEXT_CHARS", 20 * 1000 * 1000),

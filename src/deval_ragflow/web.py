@@ -638,18 +638,30 @@ class WebApplication:
                     progress=0.0,
                     progress_msg="upload accepted",
                 )
-                for path in paths:
-                    result = await service.ingest(
-                        path,
-                        allow_mixed=True,
-                        timeout=config.parse_timeout,
-                    )
+                semaphore = asyncio.Semaphore(config.upload_concurrency)
+
+                async def ingest_one(path: Path):
+                    async with semaphore:
+                        result = await service.ingest(
+                            path,
+                            allow_mixed=True,
+                            timeout=config.parse_timeout,
+                        )
                     if result.state != "DONE":
                         raise DevalError(
                             f"upload could not be parsed: {path.name} ({result.state})"
                         )
                     with self._lock:
                         job.completed += 1
+                    return result
+
+                results = await asyncio.gather(
+                    *(ingest_one(path) for path in paths),
+                    return_exceptions=True,
+                )
+                for result in results:
+                    if isinstance(result, BaseException):
+                        raise result
                 with self._lock:
                     job.state = "building"
                 graph = await service.build_graph(timeout=config.graph_timeout)

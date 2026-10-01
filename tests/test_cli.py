@@ -1,12 +1,31 @@
 from pathlib import Path
 
+import pytest
+
 from deval_ragflow.cli import CONFIRMATION, build_parser, main
-from deval_ragflow.config import Config
+from deval_ragflow.config import Config, ConfigurationError
 
 
 def test_config_repr_does_not_expose_api_key(tmp_path):
     config = Config(api_key="top-secret", registry_path=tmp_path / "registry.sqlite3")
     assert "top-secret" not in repr(config)
+
+
+def test_config_reads_upload_concurrency(tmp_path):
+    config = Config.from_env(
+        {"RAGFLOW_UPLOAD_CONCURRENCY": "3"},
+        dotenv_path=tmp_path / ".env",
+    )
+    assert config.upload_concurrency == 3
+
+
+@pytest.mark.parametrize("value", ["0", "6"])
+def test_config_rejects_upload_concurrency_outside_cap(tmp_path, value):
+    with pytest.raises(ConfigurationError, match="between 1 and 5"):
+        Config.from_env(
+            {"RAGFLOW_UPLOAD_CONCURRENCY": value},
+            dotenv_path=tmp_path / ".env",
+        )
 
 
 def test_help_lists_all_commands():
