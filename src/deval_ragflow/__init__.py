@@ -1,3 +1,3 @@
 """Local PDF provenance and RAGFlow adapter PoC."""
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"

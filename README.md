@@ -188,7 +188,7 @@ pnpm install
 VITE_RAGFLOW_WEB_URL=https://ragflow.example.org pnpm build
 ```
 
-Beispiel für zwei Nginx-Virtual-Hosts (`deval.example.org` für DEval und `ragflow.example.org` für die eingebettete RAGFlow-Weboberfläche):
+Eine kopierbare Vorlage liegt unter [`deploy/nginx/deval-ragflow.conf.example`](deploy/nginx/deval-ragflow.conf.example). Sie enthält zwei Nginx-Virtual-Hosts (`deval.example.org` für DEval und `ragflow.example.org` für die eingebettete RAGFlow-Weboberfläche):
 
 ```nginx
 server {

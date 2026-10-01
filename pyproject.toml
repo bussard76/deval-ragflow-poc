@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "deval-ragflow"
-version = "0.3.2"
+version = "0.3.3"
 description = "Small local PDF provenance and RAGFlow proof of concept"
 readme = "README.md"
 requires-python = ">=3.9,<3.13"

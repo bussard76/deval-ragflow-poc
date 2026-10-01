@@ -1,0 +1,56 @@
+# Copy to an Nginx server and replace the example domains, certificate paths,
+# and /srv/deval path.
+#
+# Build the frontend with:
+#   VITE_RAGFLOW_WEB_URL=https://ragflow.example.org pnpm build
+#
+# The RAGFlow Docker stack should use:
+#   RAGFLOW_WEB_HTTP_PORT=127.0.0.1:8080
+#   RAGFLOW_WEB_HTTPS_PORT=127.0.0.1:8443
+#
+# Keep 8790, 9380, and 9381 bound to loopback; they are not public endpoints.
+
+server {
+    listen 443 ssl;
+    server_name deval.example.org;
+
+    # ssl_certificate /etc/letsencrypt/live/deval.example.org/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/deval.example.org/privkey.pem;
+
+    root /srv/deval/frontend/dist;
+    index index.html;
+    client_max_body_size 64m;
+
+    location /api/ {
+        # Keep the /api prefix: the DEval backend serves /api/* routes.
+        proxy_pass http://127.0.0.1:8790;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 1800s;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name ragflow.example.org;
+
+    # ssl_certificate /etc/letsencrypt/live/ragflow.example.org/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/ragflow.example.org/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 1800s;
+    }
+}
