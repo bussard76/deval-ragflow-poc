@@ -446,6 +446,7 @@ class RAGFlowAdapter:
                 f"more than one RAGFlow chat has the deterministic name {name!r}"
             )
         chat_settings = {
+            "dataset_ids": ids,
             # Give the model several retrieved chunks so broad summary questions
             # summarize the source material instead of one arbitrary chunk.
             "top_n": 5,
@@ -483,11 +484,7 @@ class RAGFlowAdapter:
                 json_body=chat_settings,
             )
             return chat
-        body: dict[str, Any] = {
-            "name": name,
-            "dataset_ids": ids,
-            **chat_settings,
-        }
+        body: dict[str, Any] = {"name": name, **chat_settings}
         if llm_model:
             body["llm_id"] = llm_model
         payload = await self._request("POST", "/chats", json_body=body)

@@ -377,6 +377,7 @@ def test_ensure_chat_reapplies_llm_id_to_existing_chat():
             )
         if request.method == "PATCH" and request.url.path == "/api/v1/chats/chat":
             body = json.loads(request.content)
+            assert body["dataset_ids"] == ["dataset"]
             assert body["llm_id"] == "model"
             return httpx.Response(
                 200,
