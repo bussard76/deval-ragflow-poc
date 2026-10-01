@@ -769,10 +769,8 @@ class RAGFlowAdapter:
             if metadata_version:
                 if metadata_version == version_uid:
                     matches.append(doc)
-                elif remote_doc_name == remote_name:
-                    raise ReconciliationError(
-                        f"remote document {remote_name} has deterministic name but conflicting version metadata"
-                    )
+                # The visible filename is not the identity; another version
+                # may legitimately use the same uploaded name.
             elif remote_doc_name == remote_name:
                 # A document uploaded before its metadata PATCH is still
                 # recoverable by deterministic name; the caller patches it.

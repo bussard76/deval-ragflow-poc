@@ -282,6 +282,7 @@ PDF im Browser
 Wichtige Eigenschaften:
 
 - `document_uid` ist der SHA-256-Hash der PDF-Bytes.
+- RAGFlow erhält den ursprünglichen Upload-Dateinamen; `version_uid` bleibt in den Metadaten die technische Identität für idempotente Wiederholungen.
 - Die lokale Registry liegt in `.data/registry.sqlite3` und enthält Provenienz, Seiten, Absätze, Bboxes und RAGFlow-Mappings.
 - Uploads laufen asynchron; bis zu `RAGFLOW_UPLOAD_CONCURRENCY` (Standard: 5) Dokumente werden pro Job parallel an RAGFlow übergeben. Das Frontend fragt Job- und GraphRAG-Status regelmäßig ab.
 - Malformed, verschlüsselte, leere und reine Scan-PDFs werden lokal registriert, aber nicht automatisch hochgeladen.

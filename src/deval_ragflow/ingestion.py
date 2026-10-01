@@ -7,7 +7,6 @@ import json
 import time
 from typing import Any
 
-from .adapter import RAGFlowAdapter
 from .config import Config
 from .errors import AdapterError, ReconciliationError
 from .models import PROVENANCE_SCHEMA, DocumentExtraction, IngestionResult, RemoteStatus
@@ -24,15 +23,15 @@ def _is_missing_remote_document(exc: Exception) -> bool:
 
 
 class IngestionService:
-    def __init__(self, config: Config, registry: Registry, adapter: RAGFlowAdapter):
+    def __init__(self, config: Config, registry: Registry, adapter: Any):
         self.config = config
         self.registry = registry
         self.adapter = adapter
 
     @staticmethod
     def remote_name(extraction: DocumentExtraction) -> str:
-        # The hash is the identity; the source basename is metadata, not an id.
-        return f"deval-{extraction.version_uid}.pdf"
+        # Keep the user-visible filename; version_uid in meta_fields remains the identity.
+        return extraction.source_basename
 
     @staticmethod
     def remote_metadata(extraction: DocumentExtraction) -> dict[str, Any]:
@@ -647,7 +646,7 @@ async def ingest_pdf(
     path: Any,
     config: Config,
     registry: Registry,
-    adapter: RAGFlowAdapter,
+    adapter: Any,
     *,
     allow_mixed: bool = False,
     timeout: float | None = None,

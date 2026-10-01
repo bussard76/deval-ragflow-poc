@@ -23,6 +23,8 @@ def test_extraction_and_mapping_are_idempotent(registry):
     first = registry.reserve_mapping("scope", item.version_uid, "deval-version.pdf")
     second = registry.reserve_mapping("scope", item.version_uid, "deval-version.pdf")
     assert first.mapping_uid == second.mapping_uid
+    renamed = registry.reserve_mapping("scope", item.version_uid, "file.pdf")
+    assert renamed.remote_name == "file.pdf"
     registry.set_mapping_remote("scope", item.version_uid, "remote-doc")
     assert (
         registry.get_mapping_by_remote_id("remote-doc").version_uid == item.version_uid

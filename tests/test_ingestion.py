@@ -11,6 +11,7 @@ PDF = Path(__file__).parent / "fixtures" / "golden.pdf"
 class FakeAdapter:
     def __init__(self, statuses=None):
         self.uploads = 0
+        self.uploaded_names = []
         self.finds = 0
         self.starts = 0
         self.cancels = 0
@@ -25,6 +26,7 @@ class FakeAdapter:
 
     async def upload_document(self, dataset_id, filename, content):
         self.uploads += 1
+        self.uploaded_names.append(filename)
         return {"id": "document", "name": filename}
 
     async def get_document(self, dataset_id, document_id):
@@ -67,6 +69,7 @@ def test_ingest_is_idempotent_and_commits_local_first(config, registry):
     second = run(service.ingest(PDF))
     assert first.state == "DONE" and second.state == "DONE"
     assert adapter.uploads == 1 and adapter.starts == 1
+    assert adapter.uploaded_names == [PDF.name]
     assert registry.counts()["documents"] == 1
     assert registry.counts()["ragflow_documents"] == 1
 

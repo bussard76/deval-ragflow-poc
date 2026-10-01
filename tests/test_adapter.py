@@ -13,7 +13,6 @@ from deval_ragflow.errors import (
     AdapterError,
     DatasetConfigurationError,
     RAGFlowBusinessError,
-    ReconciliationError,
     UnsafeOperation,
 )
 
@@ -481,7 +480,7 @@ def test_business_code_and_safe_delete_fail_closed():
     run(exercise())
 
 
-def test_conflicting_deterministic_document_metadata_fails_closed():
+def test_same_filename_with_different_metadata_is_not_reused():
     def handler(request):
         return httpx.Response(
             200,
@@ -502,8 +501,10 @@ def test_conflicting_deterministic_document_metadata_fails_closed():
     async def exercise():
         adapter = RAGFlowAdapter(transport=httpx.MockTransport(handler))
         try:
-            with pytest.raises(ReconciliationError):
+            assert (
                 await adapter.find_document("dataset", "deval-version.pdf", "version")
+                is None
+            )
         finally:
             await adapter.aclose()
 

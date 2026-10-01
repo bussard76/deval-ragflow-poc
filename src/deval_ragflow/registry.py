@@ -380,8 +380,10 @@ class Registry:
             try:
                 self._transaction()
                 self._connection.execute(
-                    """INSERT OR IGNORE INTO ragflow_documents(dataset_scope, version_uid, remote_name, state)
-                       VALUES(?, ?, ?, 'RESERVED')""",
+                    """INSERT INTO ragflow_documents(dataset_scope, version_uid, remote_name, state)
+                       VALUES(?, ?, ?, 'RESERVED')
+                       ON CONFLICT(dataset_scope, version_uid)
+                       DO UPDATE SET remote_name=excluded.remote_name""",
                     (dataset_scope, version_uid, remote_name),
                 )
                 row = self._connection.execute(
