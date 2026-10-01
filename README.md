@@ -180,15 +180,28 @@ export RAGFLOW_WEB_HTTPS_PORT=127.0.0.1:8443
 ./scripts/ragflow-compose.sh wait
 ```
 
-Das Frontend wird für den Produktivbetrieb statisch gebaut. `DEVAL_API_URL` wird dabei nicht benötigt, weil Nginx `/api/` unter derselben Origin weiterleitet:
+Für einen lokalen Reverse-Proxy-Test ist Nginx bereits als Service im Compose-Overlay enthalten. Dafür die optionalen Portüberschreibungen aus dem Produktionsbeispiel nicht setzen bzw. entfernen; lokal bleibt RAGFlow auf `127.0.0.1:80`. Zuerst das Frontend mit der öffentlichen Proxy-URL bauen:
 
 ```bash
+unset RAGFLOW_WEB_HTTP_PORT RAGFLOW_WEB_HTTPS_PORT
 cd frontend
 pnpm install
+VITE_RAGFLOW_WEB_URL=http://ragflow.localhost:8088 pnpm build
+cd ..
+./scripts/ragflow-compose.sh verify
+./scripts/ragflow-compose.sh up
+./scripts/ragflow-compose.sh wait
+```
+
+Danach `http://deval.localhost:8088` öffnen. Das Frontend und der eingebettete RAGFlow-Link laufen dann beide über den Nginx-Container; RAGFlow selbst bleibt intern auf `127.0.0.1:80`. Die lokale Nginx-Konfiguration liegt unter [`deploy/nginx/local.conf`](deploy/nginx/local.conf).
+
+Für einen Produktivbetrieb wird das Frontend ebenfalls statisch gebaut. `DEVAL_API_URL` wird dabei nicht benötigt, weil Nginx `/api/` unter derselben Origin weiterleitet:
+
+```bash
 VITE_RAGFLOW_WEB_URL=https://ragflow.example.org pnpm build
 ```
 
-Eine kopierbare Vorlage liegt unter [`deploy/nginx/deval-ragflow.conf.example`](deploy/nginx/deval-ragflow.conf.example). Sie enthält zwei Nginx-Virtual-Hosts (`deval.example.org` für DEval und `ragflow.example.org` für die eingebettete RAGFlow-Weboberfläche):
+Eine Vorlage für zwei TLS-Virtual-Hosts liegt unter [`deploy/nginx/deval-ragflow.conf.example`](deploy/nginx/deval-ragflow.conf.example). Sie verwendet `deval.example.org` für DEval und `ragflow.example.org` für die eingebettete RAGFlow-Weboberfläche:
 
 ```nginx
 server {

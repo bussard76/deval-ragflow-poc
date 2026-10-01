@@ -1,0 +1,26 @@
+services:
+  deval-nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      ragflow-cpu:
+        condition: service_started
+    ports:
+      - "127.0.0.1:${DEVAL_PROXY_PORT:-8088}:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - ragflow
+    volumes:
+      - type: bind
+        source: ${DEVAL_ROOT:?DEVAL_ROOT must be set}/frontend/dist
+        target: /usr/share/nginx/html
+        read_only: true
+      - type: bind
+        source: ${DEVAL_ROOT}/deploy/nginx/local.conf
+        target: /etc/nginx/conf.d/default.conf
+        read_only: true
+
+networks:
+  ragflow:
+    driver: bridge

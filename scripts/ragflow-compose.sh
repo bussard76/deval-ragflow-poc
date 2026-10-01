@@ -12,6 +12,8 @@ COMMIT=a024bea0cd93f39e6652a42bf84dd20c55bc560b
 IMAGE=infiniflow/ragflow:v0.27.2
 RAGFLOW_WEB_HTTP_PORT=${RAGFLOW_WEB_HTTP_PORT:-127.0.0.1:80}
 RAGFLOW_WEB_HTTPS_PORT=${RAGFLOW_WEB_HTTPS_PORT:-127.0.0.1:443}
+DEVAL_PROXY_PORT=${DEVAL_PROXY_PORT:-8088}
+NGINX_COMPOSE_FILE="$ROOT/deploy/docker-compose.nginx.yml"
 
 fail() {
   printf 'ragflow-compose: %s\n' "$*" >&2
@@ -104,7 +106,12 @@ for line in lines:
     if "=" not in line:
         continue
     key, raw_value = line.split("=", 1)
-    if raw_value.strip() and any(marker in key.upper() for marker in ("PASSWORD", "SECRET", "TOKEN", "API_KEY")):
+    normalized_key = key.upper()
+    if raw_value.strip() and (
+        any(marker in normalized_key for marker in ("PASSWORD", "SECRET", "API_KEY", "ACCESS_KEY"))
+        or normalized_key == "TOKEN"
+        or normalized_key.endswith("_TOKEN")
+    ):
         values[key] = secrets.token_hex(24)
 # RAGFlow connects as MySQL root by default, so both variables must match.
 values["MYSQL_PASSWORD"] = values["MYSQL_ROOT_PASSWORD"]
@@ -172,7 +179,8 @@ compose() {
       NATS_PORT=127.0.0.1:4222 EXPOSE_NATS_PORT=127.0.0.1:4222 EXPOSE_CLICKHOUSE_TCP_PORT=127.0.0.1:9900 \
       CLICKHOUSE_HTTP_PORT=127.0.0.1:8123 JAEGER_OTLP_GRPC_PORT=127.0.0.1:4317 JAEGER_OTLP_HTTP_PORT=127.0.0.1:4318 \
       JAEGER_UI_PORT=127.0.0.1:16686 TEI_PORT=127.0.0.1:6380 TEI_MODEL=BAAI/bge-small-en-v1.5 \
-      docker compose --env-file .env -f docker-compose.yml "$@")
+      DEVAL_ROOT="$ROOT" DEVAL_PROXY_PORT="$DEVAL_PROXY_PORT" \
+      docker compose --env-file .env -f docker-compose.yml -f "$NGINX_COMPOSE_FILE" "$@")
 }
 
 verified_config() {
@@ -182,6 +190,7 @@ verified_config() {
   printf '%s\n' "$rendered" | grep -Eq 'esdata01:|mysql_data:|minio_data:|redis_data:' || fail "official persistent volumes are missing"
   printf '%s\n' "$rendered" | grep -Fq 'tei-cpu:' || fail "TEI CPU embedding service is missing"
   printf '%s\n' "$rendered" | grep -Fq 'BAAI/bge-small-en-v1.5' || fail "TEI model is not the reproducible CPU default"
+  printf '%s\n' "$rendered" | grep -Fq 'nginx:1.27-alpine' || fail "DEval Nginx reverse proxy is missing"
   local socket_pattern
   socket_pattern='docker.'$(printf 'sock')
   if printf '%s\n' "$rendered" | grep -Eiq "sandbox-executor-manager|${socket_pattern}|privileged"; then
@@ -220,10 +229,20 @@ for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
     if "=" not in line:
         continue
     key, value = line.split("=", 1)
-    if value and any(marker in key.upper() for marker in ("PASSWORD", "SECRET", "TOKEN", "API_KEY", "ACCESS_KEY")):
+    normalized_key = key.upper()
+    if value and (
+        any(marker in normalized_key for marker in ("PASSWORD", "SECRET", "API_KEY", "ACCESS_KEY"))
+        or normalized_key == "TOKEN"
+        or normalized_key.endswith("_TOKEN")
+    ):
         values.append(value)
 for key, value in os.environ.items():
-    if value and any(marker in key.upper() for marker in ("PASSWORD", "SECRET", "TOKEN", "API_KEY", "ACCESS_KEY")):
+    normalized_key = key.upper()
+    if value and (
+        any(marker in normalized_key for marker in ("PASSWORD", "SECRET", "API_KEY", "ACCESS_KEY"))
+        or normalized_key == "TOKEN"
+        or normalized_key.endswith("_TOKEN")
+    ):
         values.append(value)
 text = sys.stdin.read()
 for value in sorted(set(values), key=len, reverse=True):
