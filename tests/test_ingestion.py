@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import asyncio
 from pathlib import Path
+from typing import Any
 
 from deval_ragflow.ingestion import IngestionService
 from deval_ragflow.models import GraphStatus, RemoteStatus
-
 
 PDF = Path(__file__).parent / "fixtures" / "golden.pdf"
 
@@ -20,9 +22,10 @@ class FakeAdapter:
     async def ensure_dataset(self, name, **kwargs):
         return {"id": "dataset", "name": name}
 
-    async def find_document(self, dataset_id, name, version_uid, max_pages=20):
+    async def find_document(
+        self, dataset_id, name, version_uid, max_pages=20
+    ) -> dict[str, Any] | None:
         self.finds += 1
-        return None
 
     async def upload_document(self, dataset_id, filename, content):
         self.uploads += 1
@@ -63,7 +66,12 @@ def run(coro):
 
 
 def test_ingest_is_idempotent_and_commits_local_first(config, registry):
-    adapter = FakeAdapter([RemoteStatus("UNSTART", 0, "", (), 0, 0, {"run": "UNSTART"}), RemoteStatus("DONE", 1, "done", ("done",), 1, 1, {"run": "DONE"})])
+    adapter = FakeAdapter(
+        [
+            RemoteStatus("UNSTART", 0, "", (), 0, 0, {"run": "UNSTART"}),
+            RemoteStatus("DONE", 1, "done", ("done",), 1, 1, {"run": "DONE"}),
+        ]
+    )
     service = IngestionService(config, registry, adapter)
     first = run(service.ingest(PDF))
     second = run(service.ingest(PDF))
@@ -74,10 +82,16 @@ def test_ingest_is_idempotent_and_commits_local_first(config, registry):
     assert registry.counts()["ragflow_documents"] == 1
 
 
-def test_scanned_or_mixed_without_approval_never_calls_remote(config, registry, tmp_path):
+def test_scanned_or_mixed_without_approval_never_calls_remote(
+    config, registry, tmp_path
+):
     import base64
+
     import fitz
-    png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
     doc = fitz.open()
     page = doc.new_page()
     page.insert_image(fitz.Rect(0, 0, 20, 20), stream=png)
@@ -91,22 +105,46 @@ def test_scanned_or_mixed_without_approval_never_calls_remote(config, registry, 
 
 
 def test_timeout_sends_one_cancel_and_records_terminal_cancel(config, registry):
-    adapter = FakeAdapter([
-        RemoteStatus("RUNNING", 0.2, "running", ("running",), 0, 0, {"run": "RUNNING"}),
-        RemoteStatus("CANCEL", 0.2, "cancelled", ("cancelled",), 0, 0, {"run": "CANCEL"}),
-    ])
+    adapter = FakeAdapter(
+        [
+            RemoteStatus(
+                "RUNNING", 0.2, "running", ("running",), 0, 0, {"run": "RUNNING"}
+            ),
+            RemoteStatus(
+                "CANCEL", 0.2, "cancelled", ("cancelled",), 0, 0, {"run": "CANCEL"}
+            ),
+        ]
+    )
     service = IngestionService(config, registry, adapter)
     result = run(service.ingest(PDF, timeout=0))
     assert result.state == "CANCELED"
     assert adapter.cancels == 1
-    assert registry.get_index(config.dataset_scope, "parse", result.version_uid)["state"] == "CANCELED"
+    assert (
+        registry.get_index(config.dataset_scope, "parse", result.version_uid)["state"]
+        == "CANCELED"
+    )
 
 
 def test_unknown_remote_state_never_counts_as_success(config, registry):
-    adapter = FakeAdapter([RemoteStatus("UNKNOWN", None, "future state", ("future state",), None, None, {"run": "FUTURE"})])
+    adapter = FakeAdapter(
+        [
+            RemoteStatus(
+                "UNKNOWN",
+                None,
+                "future state",
+                ("future state",),
+                None,
+                None,
+                {"run": "FUTURE"},
+            )
+        ]
+    )
     result = run(IngestionService(config, registry, adapter).ingest(PDF))
     assert result.state == "UNKNOWN"
-    assert registry.get_mapping(config.dataset_scope, result.version_uid).state == "UNKNOWN"
+    assert (
+        registry.get_mapping(config.dataset_scope, result.version_uid).state
+        == "UNKNOWN"
+    )
 
 
 def test_graph_requires_llm_and_persists_task(config, registry):

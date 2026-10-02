@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="deval-ragflow",
-    version="0.3.9",
+    version="0.3.10",
     description="Small local PDF provenance and RAGFlow proof of concept",
     package_dir={"": "src"},
     packages=find_packages("src"),

@@ -32,6 +32,7 @@ interface CitationSelection {
 
 interface StoredChat {
   id: string
+  createdAt?: string
   messages: Message[]
   modelId: string | null
   crossLanguages: CrossLanguage[]
@@ -48,10 +49,19 @@ const RAGFLOW_WEB_URL = (
 ).replace(/\/+$/, "")
 // Keep the pre-selector behavior by default; users can opt into either or both.
 const DEFAULT_CROSS_LANGUAGES: CrossLanguage[] = []
-const RETRIEVAL_CHUNK_OPTIONS = Array.from(
-  { length: 16 },
-  (_, index) => index + 5,
-)
+const MAX_STORED_CHATS = 10
+const CHAT_START_FORMATTER = new Intl.DateTimeFormat("de-DE", {
+  dateStyle: "medium",
+  timeStyle: "short",
+})
+
+function formatChatStart(createdAt?: string): string {
+  if (!createdAt) return "Ohne Startdatum"
+  const date = new Date(createdAt)
+  return Number.isNaN(date.getTime())
+    ? "Ohne Startdatum"
+    : CHAT_START_FORMATTER.format(date)
+}
 
 function chatStorageKey(collectionId: string) {
   return `${CHAT_STORAGE_PREFIX}${encodeURIComponent(collectionId)}`
@@ -60,6 +70,7 @@ function chatStorageKey(collectionId: string) {
 function newStoredChat(): StoredChat {
   return {
     id: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
     messages: [],
     modelId: null,
     crossLanguages: [...DEFAULT_CROSS_LANGUAGES],
@@ -117,6 +128,7 @@ function isStoredChat(value: unknown): value is StoredChat {
     typeof chat.id === "string" &&
     chat.id.length > 0 &&
     Array.isArray(chat.messages) &&
+    (chat.createdAt === undefined || typeof chat.createdAt === "string") &&
     (chat.modelId === null || typeof chat.modelId === "string") &&
     (chat.crossLanguages === undefined || Array.isArray(chat.crossLanguages))
   )
@@ -143,11 +155,16 @@ function readStoredChats(collectionId: string): StoredChatState {
     if (!value || typeof value !== "object") return empty
     const stored = value as Record<string, unknown>
     if (Array.isArray(stored.chats)) {
-      const chats = stored.chats.filter(isStoredChat).map((chat) => ({
-        ...chat,
-        messages: sanitizeMessages(chat.messages),
-        crossLanguages: sanitizeCrossLanguages(chat.crossLanguages),
-      }))
+      const chats = stored.chats
+        .filter(isStoredChat)
+        .map((chat) => ({
+          ...chat,
+          createdAt:
+            typeof chat.createdAt === "string" ? chat.createdAt : undefined,
+          messages: sanitizeMessages(chat.messages),
+          crossLanguages: sanitizeCrossLanguages(chat.crossLanguages),
+        }))
+        .slice(0, MAX_STORED_CHATS)
       if (!chats.length) return empty
       const activeChatId =
         typeof stored.activeChatId === "string" &&
@@ -363,7 +380,7 @@ function StatusBadge({ status }: { status: GraphRAGStatus }) {
   const { label, color } = configs[status]
   return (
     <span
-      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] font-mono font-medium ${color}`}
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 font-mono text-[10px] font-medium shadow-sm ${color}`}
     >
       {status === "processing" || status === "building" ? (
         <IconSpinner size={10} />
@@ -379,8 +396,8 @@ function RagFlowPanel() {
   const [loaded, setLoaded] = useState(false)
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col bg-[var(--background)]">
-      <div className="flex shrink-0 items-center gap-3 border-b border-[var(--border)] bg-[var(--card)] px-5 py-2.5">
+    <section className="flex min-h-0 flex-1 flex-col bg-transparent">
+      <div className="app-topbar flex shrink-0 items-center gap-3 border-b border-[var(--border)] px-5 py-3">
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-medium">RAGFlow-Backend</p>
           <p className="truncate font-mono text-[10px] text-[var(--muted-foreground)]">
@@ -705,7 +722,11 @@ function ChatPanel({
   )
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
+  const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false)
   const [savingChunkCount, setSavingChunkCount] = useState(false)
+  const [draftResultLimit, setDraftResultLimit] = useState(
+    collection.retrieval_chunk_count ?? 5,
+  )
   const bottomRef = useRef<HTMLDivElement>(null)
   const conversationId = useRef(crypto.randomUUID())
   const skipChatPersistRef = useRef(false)
@@ -725,6 +746,7 @@ function ChatPanel({
     configurableModels[0] ??
     null
   const crossLanguages = chat?.crossLanguages ?? DEFAULT_CROSS_LANGUAGES
+  const savedResultLimit = collection.retrieval_chunk_count ?? 5
 
   function updateChat(
     chatId: string,
@@ -752,8 +774,18 @@ function ChatPanel({
     const next = newStoredChat()
     setChatState((current) => ({
       activeChatId: next.id,
-      chats: [next, ...current.chats],
+      chats: [next, ...current.chats].slice(0, MAX_STORED_CHATS),
     }))
+  }
+
+  function deleteChat() {
+    if (loading || !chat || !window.confirm("Diesen Chat wirklich löschen?"))
+      return
+    setChatState((current) => {
+      const chats = current.chats.filter((item) => item.id !== activeChatId)
+      const remaining = chats.length ? chats : [newStoredChat()]
+      return { activeChatId: remaining[0].id, chats: remaining }
+    })
   }
 
   function toggleCrossLanguage(language: CrossLanguage) {
@@ -771,11 +803,14 @@ function ChatPanel({
     })
   }
 
-  async function changeRetrievalChunkCount(count: number) {
-    if (loading || savingChunkCount) return
+  async function saveResultLimit() {
+    if (loading || savingChunkCount || draftResultLimit === savedResultLimit)
+      return
     setSavingChunkCount(true)
     try {
-      await onRetrievalChunkCountChange(count)
+      await onRetrievalChunkCountChange(draftResultLimit)
+    } catch {
+      setDraftResultLimit(savedResultLimit)
     } finally {
       setSavingChunkCount(false)
     }
@@ -784,7 +819,12 @@ function ChatPanel({
   useEffect(() => {
     skipChatPersistRef.current = true
     setChatState(readStoredChats(collection.id))
+    setAdvancedSettingsOpen(false)
   }, [collection.id])
+
+  useEffect(() => {
+    setDraftResultLimit(savedResultLimit)
+  }, [collection.id, savedResultLimit])
 
   useEffect(() => {
     setInput("")
@@ -868,77 +908,50 @@ function ChatPanel({
   }
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Chat header */}
-      <div className="flex items-center gap-3 px-6 py-3 border-b border-[var(--border)] shrink-0">
-        <div className="flex-1 min-w-0">
-          <p className="text-[13px] font-medium truncate">{collection.name}</p>
-          <div className="flex items-center gap-2 mt-1">
+    <div className="flex h-full flex-col">
+      {/* Collection context; conversation controls stay close to the composer. */}
+      <div className="chat-header flex shrink-0 items-center gap-3 px-5 py-3 sm:px-6">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              aria-hidden="true"
+              className="h-2 w-2 shrink-0 rounded-full bg-[var(--accent)] shadow-[0_0_0_4px_rgba(71,85,212,0.12)]"
+            />
+            <p className="truncate text-[14px] font-semibold tracking-tight">
+              {collection.name}
+            </p>
+          </div>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
             <StatusBadge status={collection.status} />
+            <span className="text-[11px] text-[var(--muted-foreground)]">
+              {collection.documents.length} Dokument
+              {collection.documents.length === 1 ? "" : "e"}
+            </span>
           </div>
           {(documentsProcessing || graphUpdating) &&
             collection.documents.length > 0 && (
-              <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
+              <p className="mt-2 text-[11px] leading-relaxed text-[var(--muted-foreground)]">
                 {documentsProcessing
                   ? "Dokumente werden verarbeitet. Der Chat ist vorübergehend pausiert."
                   : "GraphRAG wird aktualisiert. Der Chat bleibt mit den bereits verarbeiteten Dokumenten verfügbar."}
               </p>
             )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <label
-            htmlFor="chat-select"
-            className="font-mono text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider hidden sm:block"
-          >
-            Chat
-          </label>
-          <select
-            id="chat-select"
-            value={activeChatId}
-            onChange={(event) => selectChat(event.target.value)}
-            disabled={loading}
-            aria-label="Chat auswählen"
-            className="w-36 rounded border border-[var(--border)] bg-[var(--card)] px-2 py-1.5 text-[12px] text-[var(--foreground)] focus:outline-none focus:border-[var(--accent)] disabled:opacity-60"
-          >
-            {chatState.chats.map((item, index) => {
-              const firstQuestion = item.messages.find(
-                (message) => message.role === "user",
-              )?.content
-              const label = firstQuestion?.trim()
-                ? firstQuestion.trim().slice(0, 28)
-                : `Chat ${index + 1}`
-              return (
-                <option key={item.id} value={item.id}>
-                  {label}
-                </option>
-              )
-            })}
-          </select>
-          <button
-            type="button"
-            onClick={createChat}
-            disabled={loading}
-            aria-label="Neuen Chat anlegen"
-            title="Neuen Chat anlegen"
-            className="inline-flex h-7 w-7 items-center justify-center rounded border border-[var(--border)] text-[var(--muted-foreground)] hover:bg-[var(--secondary)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <IconPlus size={14} />
-          </button>
-        </div>
-        {selectedModel && (
-          <div className="flex items-center gap-1.5 font-mono text-[11px] text-[var(--muted-foreground)] bg-[var(--muted)] px-2 py-1 rounded shrink-0">
-            <span>{selectedModel.name}</span>
-            <span className="opacity-50">·</span>
-            <span>{selectedModel.provider}</span>
-          </div>
-        )}
+        <span className="hidden shrink-0 rounded-full bg-[var(--card)] px-3 py-1.5 font-mono text-[10px] text-[var(--muted-foreground)] shadow-sm md:inline-flex">
+          {messages.length === 0
+            ? "Neuer lokaler Chat"
+            : `${messages.length} Nachricht${messages.length === 1 ? "" : "en"}`}
+        </span>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-6 py-4 flex flex-col gap-4">
+      <div className="flex flex-1 flex-col gap-5 overflow-y-auto px-5 py-6 sm:px-7">
         {messages.length === 0 && (
-          <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center py-12">
-            <p className="text-[14px] font-medium">
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 py-12 text-center">
+            <span className="mb-1 flex h-10 w-10 items-center justify-center rounded-2xl bg-[var(--secondary)] text-[var(--accent)] shadow-sm">
+              <IconSend size={16} />
+            </span>
+            <p className="text-[15px] font-semibold tracking-tight">
               {selectedModel ? "Chat bereit" : "Modell wählen und loslegen"}
             </p>
             <p className="text-[13px] text-[var(--muted-foreground)] max-w-xs">
@@ -956,10 +969,10 @@ function ChatPanel({
             }`}
           >
             <div
-              className={`max-w-[85%] rounded px-4 py-3 text-[14px] leading-relaxed ${
+              className={`max-w-[88%] rounded-2xl px-4 py-3 text-[14px] leading-relaxed ${
                 msg.role === "user"
-                  ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
-                  : "bg-[var(--card)] border border-[var(--border)]"
+                  ? "message-user bg-[var(--primary)] text-[var(--primary-foreground)]"
+                  : "message-assistant border border-[var(--border)]"
               }`}
             >
               {msg.role === "assistant" ? (
@@ -982,7 +995,7 @@ function ChatPanel({
           </div>
         ))}
         {loading && (
-          <div className="flex items-center gap-2 text-[13px] text-[var(--muted-foreground)]">
+          <div className="inline-flex w-fit items-center gap-2 rounded-full bg-[var(--card)] px-3 py-1.5 text-[12px] text-[var(--muted-foreground)] shadow-sm">
             <IconSpinner size={14} />
             <span>Antwort wird generiert…</span>
           </div>
@@ -990,126 +1003,239 @@ function ChatPanel({
         <div ref={bottomRef} />
       </div>
 
-      {/* Input + model selector */}
-      <div className="px-6 py-4 border-t border-[var(--border)] shrink-0 flex flex-col gap-3">
-        {/* Textarea + send */}
-        <div className="flex gap-2">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault()
-                sendMessage()
-              }
-            }}
-            placeholder={
-              selectedModel
-                ? documentsProcessing
-                  ? "Dokumente werden verarbeitet…"
-                  : "Frage stellen oder Zusammenfassung anfordern…"
-                : "Erst Modell auswählen…"
-            }
-            disabled={!selectedModel || documentsProcessing}
-            rows={2}
-            className="flex-1 resize-none rounded border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-[14px] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--accent)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          />
-          <button
-            onClick={sendMessage}
-            disabled={
-              !input.trim() || !selectedModel || loading || documentsProcessing
-            }
-            className="px-3 py-2 rounded bg-[var(--primary)] text-[var(--primary-foreground)] disabled:opacity-40 disabled:cursor-not-allowed hover:bg-[var(--accent)] transition-colors self-end"
-          >
-            <IconSend size={15} />
-          </button>
-        </div>
+      {/* Keep history and optional controls close to the next message. */}
+      <div className="shrink-0 px-4 pb-4 pt-2 sm:px-6">
+        <div className="chat-composer flex flex-col gap-3 p-3 sm:p-4">
+          <div className="flex min-w-0 items-center gap-2 border-b border-[var(--border)] pb-3">
+            <label
+              htmlFor="chat-select"
+              className="shrink-0 font-mono text-[10px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]"
+            >
+              Verlauf
+            </label>
+            <select
+              id="chat-select"
+              value={activeChatId}
+              onChange={(event) => selectChat(event.target.value)}
+              disabled={loading}
+              aria-label="Historischen Chat auswählen"
+              className="w-40 shrink-0 rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-[12px] text-[var(--foreground)] focus:border-[var(--accent)] focus:outline-none focus:ring-4 focus:ring-[var(--accent)]/10 disabled:cursor-not-allowed disabled:opacity-60 sm:w-56"
+            >
+              {chatState.chats.map((item, index) => {
+                const firstQuestion = item.messages.find(
+                  (message) => message.role === "user",
+                )?.content
+                const label = firstQuestion?.trim()
+                  ? firstQuestion.trim().slice(0, 36)
+                  : `Chat ${index + 1}`
+                return (
+                  <option key={item.id} value={item.id}>
+                    {formatChatStart(item.createdAt)} · {label}
+                  </option>
+                )
+              })}
+            </select>
+            <button
+              type="button"
+              onClick={deleteChat}
+              disabled={loading}
+              aria-label="Aktuellen Chat löschen"
+              title="Aktuellen Chat löschen"
+              className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)] shadow-sm transition-colors hover:border-red-300 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <span aria-hidden="true" className="text-base leading-none">
+                ×
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={createChat}
+              disabled={loading}
+              aria-label="Neuen Chat anlegen"
+              title="Neuen Chat anlegen"
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-2.5 text-[var(--muted-foreground)] shadow-sm transition-colors hover:border-[var(--accent)]/35 hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <IconPlus size={14} />
+              <span className="hidden text-[11px] sm:inline">Neu</span>
+            </button>
+          </div>
 
-        {/* Model select */}
-        <div className="flex items-center gap-3">
-          <fieldset className="flex items-center gap-2 shrink-0">
-            <legend className="font-mono text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider mr-1">
-              Suche in
-            </legend>
-            {CROSS_LANGUAGE_OPTIONS.map((language) => (
-              <label
-                key={language}
-                className="inline-flex items-center gap-1 text-[12px] text-[var(--foreground)]"
-              >
-                <input
-                  type="checkbox"
-                  checked={crossLanguages.includes(language)}
-                  onChange={() => toggleCrossLanguage(language)}
-                  disabled={loading || documentsProcessing}
-                  className="accent-[var(--accent)]"
-                />
-                {language === "German" ? "Deutsch" : "English"}
-              </label>
-            ))}
-          </fieldset>
-          <label
-            htmlFor="retrieval-chunk-count"
-            className="font-mono text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider shrink-0"
-          >
-            Chunks
-          </label>
-          <select
-            id="retrieval-chunk-count"
-            value={collection.retrieval_chunk_count ?? 5}
-            onChange={(event) =>
-              void changeRetrievalChunkCount(Number(event.target.value))
-            }
-            disabled={loading || savingChunkCount}
-            aria-label="Anzahl der Retrieval-Chunks"
-            title="Anzahl der Textabschnitte pro Anfrage"
-            className="w-16 shrink-0 rounded border border-[var(--border)] bg-[var(--card)] px-2 py-1.5 text-[13px] text-[var(--foreground)] focus:outline-none focus:border-[var(--accent)] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {RETRIEVAL_CHUNK_OPTIONS.map((count) => (
-              <option key={count} value={count}>
-                {count}
-              </option>
-            ))}
-          </select>
-          <label
-            htmlFor="model-select"
-            className="font-mono text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider shrink-0"
-          >
-            Modell
-          </label>
-          <select
-            id="model-select"
-            value={selectedModel?.id ?? ""}
-            onChange={(e) => {
-              const found =
-                configurableModels.find(
-                  (model) => model.id === e.target.value,
-                ) ?? null
-              updateChat(activeChatId, (current) => ({
-                ...current,
-                modelId: found?.id ?? null,
-              }))
-            }}
-            disabled={messages.length > 0 || loading || documentsProcessing}
-            className="w-52 shrink-0 rounded border border-[var(--border)] bg-[var(--card)] px-2 py-1.5 text-[13px] text-[var(--foreground)] focus:outline-none focus:border-[var(--accent)] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            <option value="">— Modell wählen —</option>
-            {models.map((model) => {
-              const isConfigured = model.configured !== false
-              return (
-                <option
-                  key={model.id}
-                  value={model.id}
-                  disabled={!isConfigured}
+          <div className="flex items-end gap-2">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault()
+                  sendMessage()
+                }
+              }}
+              placeholder={
+                selectedModel
+                  ? documentsProcessing
+                    ? "Dokumente werden verarbeitet…"
+                    : "Frage stellen oder Zusammenfassung anfordern…"
+                  : "Erst ein Modell auswählen…"
+              }
+              disabled={!selectedModel || documentsProcessing}
+              rows={2}
+              className="min-h-20 flex-1 resize-none rounded-xl border border-[var(--border)] bg-[var(--background)] px-3.5 py-2.5 text-[14px] leading-relaxed placeholder:text-[var(--muted-foreground)] focus:border-[var(--accent)] focus:outline-none focus:ring-4 focus:ring-[var(--accent)]/10 transition disabled:cursor-not-allowed disabled:opacity-50"
+            />
+            <button
+              type="button"
+              onClick={sendMessage}
+              disabled={
+                !input.trim() || !selectedModel || loading || documentsProcessing
+              }
+              aria-label="Nachricht senden"
+              className="inline-flex h-10 items-center gap-2 rounded-xl bg-[var(--primary)] px-3.5 text-[var(--primary-foreground)] shadow-sm transition hover:-translate-y-px hover:bg-[var(--accent)] hover:shadow-md disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:translate-y-0 self-end"
+            >
+              <IconSend size={15} />
+              <span className="hidden text-[12px] font-medium sm:inline">
+                Senden
+              </span>
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <fieldset className="flex items-center gap-1.5">
+              <legend className="mr-1 font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Suche
+              </legend>
+              {CROSS_LANGUAGE_OPTIONS.map((language) => (
+                <label
+                  key={language}
+                  className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--background)] px-2.5 py-1 text-[11px] text-[var(--foreground)] transition hover:border-[var(--accent)]/35"
                 >
-                  {model.name} · {model.provider}
-                  {isConfigured ? "" : " (noch nicht in RAGFlow aktiviert)"}
-                </option>
-              )
-            })}
-          </select>
-          <p className="font-mono text-[10px] text-[var(--muted-foreground)] hidden sm:block shrink-0">
-            Nur Dokumenteninhalte · Chat lokal je Sammlung
-          </p>
+                  <input
+                    type="checkbox"
+                    checked={crossLanguages.includes(language)}
+                    onChange={() => toggleCrossLanguage(language)}
+                    disabled={loading || documentsProcessing}
+                    className="accent-[var(--accent)]"
+                  />
+                  {language === "German" ? "Deutsch" : "English"}
+                </label>
+              ))}
+            </fieldset>
+            <label
+              htmlFor="model-select"
+              className="font-mono text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]"
+            >
+              Modell
+            </label>
+            <select
+              id="model-select"
+              value={selectedModel?.id ?? ""}
+              onChange={(e) => {
+                const found =
+                  configurableModels.find(
+                    (model) => model.id === e.target.value,
+                  ) ?? null
+                updateChat(activeChatId, (current) => ({
+                  ...current,
+                  modelId: found?.id ?? null,
+                }))
+              }}
+              disabled={messages.length > 0 || loading || documentsProcessing}
+              className="min-w-44 flex-1 rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-[12px] text-[var(--foreground)] focus:border-[var(--accent)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-60 sm:max-w-64"
+            >
+              <option value="">— Modell wählen —</option>
+              {models.map((model) => {
+                const isConfigured = model.configured !== false
+                return (
+                  <option
+                    key={model.id}
+                    value={model.id}
+                    disabled={!isConfigured}
+                  >
+                    {model.name} · {model.provider}
+                    {isConfigured ? "" : " (noch nicht in RAGFlow aktiviert)"}
+                  </option>
+                )
+              })}
+            </select>
+            <button
+              type="button"
+              onClick={() => setAdvancedSettingsOpen((open) => !open)}
+              disabled={loading || savingChunkCount}
+              aria-expanded={advancedSettingsOpen}
+              aria-controls="advanced-chat-settings"
+              className="ml-auto inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] transition hover:bg-[var(--secondary)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Erweiterte Einstellungen
+              <span
+                aria-hidden="true"
+                className={`text-[13px] transition-transform ${
+                  advancedSettingsOpen ? "rotate-180" : ""
+                }`}
+              >
+                ⌄
+              </span>
+            </button>
+          </div>
+
+          {advancedSettingsOpen && (
+            <section
+              id="advanced-chat-settings"
+              className="advanced-chat-settings rounded-xl border border-[var(--border)] bg-[var(--background)] p-3"
+              aria-label="Erweiterte Chat-Einstellungen"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-[12px] font-semibold">Trefferlimit</p>
+                  <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                    Maximale Dokumentenergebnisse pro Anfrage
+                  </p>
+                </div>
+                <output
+                  aria-live="polite"
+                  className="rounded-full bg-[var(--card)] px-2.5 py-1 font-mono text-[12px] font-medium text-[var(--accent)] shadow-sm"
+                >
+                  {draftResultLimit}
+                </output>
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <span className="font-mono text-[10px] text-[var(--muted-foreground)]">
+                  5
+                </span>
+                <input
+                  type="range"
+                  min="5"
+                  max="20"
+                  step="1"
+                  value={draftResultLimit}
+                  onChange={(event) =>
+                    setDraftResultLimit(Number(event.target.value))
+                  }
+                  disabled={loading || savingChunkCount}
+                  aria-label="Trefferlimit: maximale Dokumentenergebnisse"
+                  aria-valuetext={`${draftResultLimit} Dokumentenergebnisse`}
+                  className="retrieval-limit-range min-w-0 flex-1 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <span className="font-mono text-[10px] text-[var(--muted-foreground)]">
+                  20
+                </span>
+              </div>
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <p className="text-[10px] text-[var(--muted-foreground)]">
+                  Mehr Ergebnisse erhöhen Kontextgröße und Antwortzeit.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void saveResultLimit()}
+                  disabled={
+                    loading ||
+                    savingChunkCount ||
+                    draftResultLimit === savedResultLimit
+                  }
+                  className="shrink-0 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-[11px] font-medium text-[var(--primary-foreground)] transition hover:bg-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {savingChunkCount ? "Speichert…" : "Übernehmen"}
+                </button>
+              </div>
+            </section>
+          )}
         </div>
       </div>
     </div>
@@ -1183,8 +1309,8 @@ function SourcesPanel({ selection }: { selection: CitationSelection | null }) {
   const [imageOpen, setImageOpen] = useState(false)
 
   return (
-    <div className="flex flex-col h-full border-l border-[var(--border)]">
-      <div className="px-4 py-3 border-b border-[var(--border)]">
+    <div className="source-panel flex h-full flex-col border-l border-[var(--border)]">
+      <div className="border-b border-[var(--border)] px-4 py-3.5">
         <p className="text-[13px] font-semibold">Quelle</p>
         <p className="text-[10px] font-mono text-[var(--muted-foreground)] mt-1">
           Quellenausschnitt zum ausgewählten Inline-Zitat
@@ -1193,7 +1319,7 @@ function SourcesPanel({ selection }: { selection: CitationSelection | null }) {
 
       {selection ? (
         <div className="flex-1 overflow-y-auto p-4">
-          <div className="rounded border border-[var(--border)] bg-[var(--card)] overflow-hidden">
+          <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-sm">
             <div className="bg-[var(--secondary)] px-3 py-2 flex items-start gap-2 border-b border-[var(--border)]">
               <span className="font-mono text-[10px] text-[var(--muted-foreground)] bg-[var(--muted)] px-1.5 py-0.5 rounded shrink-0">
                 [{selection.index + 1}]
@@ -1304,7 +1430,7 @@ export default function App() {
 
   function maxSourceWidth() {
     const layoutWidth = layoutRef.current?.clientWidth ?? 1200
-    return Math.max(220, Math.min(640, layoutWidth - 224 - 8 - 320))
+    return Math.max(220, Math.min(640, layoutWidth - 240 - 8 - 320))
   }
 
   function resizeSource(event: React.PointerEvent<HTMLDivElement>) {
@@ -1430,8 +1556,9 @@ export default function App() {
       setError(
         updateError instanceof Error
           ? updateError.message
-          : "Retrieval-Einstellung konnte nicht gespeichert werden",
+          : "Trefferlimit konnte nicht gespeichert werden",
       )
+      throw updateError
     }
   }
 
@@ -1575,28 +1702,32 @@ export default function App() {
       (selectedCollection?.status === "processing" || graphUpdating))
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="app-shell flex h-full flex-col">
       {/* Top bar */}
-      <header className="flex items-center gap-4 px-6 h-12 border-b border-[var(--border)] bg-[var(--card)] shrink-0">
-        <div className="flex items-center gap-2">
-          <span className="text-[15px] font-bold tracking-tight text-[var(--primary)]">
-            DEval
+      <header className="app-topbar flex h-14 shrink-0 items-center gap-4 border-b border-[var(--border)] px-5 sm:px-6">
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--primary)] text-[12px] font-bold text-[var(--primary-foreground)] shadow-sm">
+            D
           </span>
-          <span className="text-[var(--border)]">/</span>
-          <span className="text-[14px] font-medium">Webchat</span>
+          <div className="flex items-baseline gap-1.5">
+            <span className="text-[15px] font-bold tracking-tight text-[var(--primary)]">
+              DEval
+            </span>
+            <span className="text-[12px] text-[var(--muted-foreground)]">Webchat</span>
+          </div>
         </div>
         <nav
-          className="ml-4 flex items-center gap-1 rounded border border-[var(--border)] p-0.5"
+          className="ml-2 flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--secondary)] p-1 shadow-inner"
           aria-label="Ansicht auswählen"
         >
           <button
             type="button"
             onClick={() => setView("chat")}
             aria-pressed={view === "chat"}
-            className={`rounded px-2.5 py-1 text-[11px] transition-colors ${
+            className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors ${
               view === "chat"
-                ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
-                : "text-[var(--muted-foreground)] hover:bg-[var(--secondary)]"
+                ? "bg-[var(--card)] text-[var(--foreground)] shadow-sm"
+                : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
             }`}
           >
             DEval-Chat
@@ -1605,17 +1736,17 @@ export default function App() {
             type="button"
             onClick={() => setView("ragflow")}
             aria-pressed={view === "ragflow"}
-            className={`rounded px-2.5 py-1 text-[11px] transition-colors ${
+            className={`rounded-lg px-2.5 py-1 text-[11px] font-medium transition-colors ${
               view === "ragflow"
-                ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
-                : "text-[var(--muted-foreground)] hover:bg-[var(--secondary)]"
+                ? "bg-[var(--card)] text-[var(--foreground)] shadow-sm"
+                : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
             }`}
           >
             RAGFlow-Backend
           </button>
         </nav>
         {error && (
-          <span className="ml-auto max-w-[50%] truncate font-mono text-[10px] text-red-700 bg-red-50 border border-red-200 px-2 py-0.5 rounded">
+          <span className="ml-auto max-w-[50%] truncate rounded-full border border-red-200 bg-red-50 px-3 py-1 font-mono text-[10px] text-red-700">
             {error}
           </span>
         )}
@@ -1631,14 +1762,14 @@ export default function App() {
           }`}
         >
         {/* Sidebar */}
-        <aside className="w-56 shrink-0 border-r border-[var(--border)] flex flex-col bg-[var(--card)]">
-          <div className="px-4 py-3 border-b border-[var(--border)] flex items-center justify-between">
+        <aside className="app-sidebar flex w-60 shrink-0 flex-col border-r border-[var(--border)]">
+          <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-3.5">
             <span className="text-[11px] font-mono font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
               Sammlungen
             </span>
             <button
               onClick={() => setShowNewForm(true)}
-              className="text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--secondary)] hover:text-[var(--accent)]"
               title="Neue Sammlung"
             >
               <IconPlus size={15} />
@@ -1659,12 +1790,12 @@ export default function App() {
                   }
                 }}
                 placeholder="Name der Sammlung"
-                className="w-full text-[13px] px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--background)] focus:outline-none focus:border-[var(--accent)]"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-2 text-[13px] shadow-sm focus:border-[var(--accent)] focus:outline-none focus:ring-4 focus:ring-[var(--accent)]/10"
               />
               <div className="flex gap-1">
                 <button
                   onClick={handleCreateCollection}
-                  className="flex-1 text-[11px] py-1 rounded bg-[var(--primary)] text-[var(--primary-foreground)] hover:bg-[var(--accent)] transition-colors"
+                  className="flex-1 rounded-lg bg-[var(--primary)] py-1.5 text-[11px] font-medium text-[var(--primary-foreground)] shadow-sm transition hover:bg-[var(--accent)]"
                 >
                   Anlegen
                 </button>
@@ -1673,7 +1804,7 @@ export default function App() {
                     setShowNewForm(false)
                     setNewName("")
                   }}
-                  className="flex-1 text-[11px] py-1 rounded border border-[var(--border)] hover:bg-[var(--secondary)] transition-colors"
+                  className="flex-1 rounded-lg border border-[var(--border)] py-1.5 text-[11px] transition hover:bg-[var(--secondary)]"
                 >
                   Abbrechen
                 </button>
@@ -1689,7 +1820,7 @@ export default function App() {
             className="hidden"
             onChange={(event) => handleSidebarUpload(event.target.files)}
           />
-          <nav className="flex-1 overflow-y-auto py-1">
+          <nav className="flex-1 overflow-y-auto px-2 py-2">
             {collections.map((col) => {
               const expanded = expandedCollections.has(col.id)
               const busy =
@@ -1700,10 +1831,10 @@ export default function App() {
               return (
                 <div
                   key={col.id}
-                  className={`text-left transition-colors ${
+                  className={`rounded-xl border text-left transition-all ${
                     selected
-                      ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
-                      : ""
+                      ? "border-[var(--accent)]/15 bg-[var(--accent)]/10 text-[var(--foreground)] shadow-sm"
+                      : "border-transparent hover:bg-[var(--secondary)]/70"
                   }`}
                 >
                   <div className="flex items-start">
@@ -1727,7 +1858,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => selectCollection(col.id)}
-                      className="flex min-w-0 flex-1 items-start gap-2.5 px-2 py-2.5 text-left transition-colors hover:bg-black/5"
+                      className="flex min-w-0 flex-1 items-start gap-2.5 px-2 py-2.5 text-left"
                     >
                       <IconFolder size={14} className="mt-0.5 shrink-0" />
                       <div className="min-w-0 flex-1">
@@ -1737,7 +1868,7 @@ export default function App() {
                         <div
                           className={`mt-0.5 text-[10px] font-mono ${
                             selected
-                              ? "text-[var(--primary-foreground)]/70"
+                              ? "text-[var(--accent)]"
                               : "text-[var(--muted-foreground)]"
                           }`}
                         >
@@ -1786,7 +1917,7 @@ export default function App() {
                     <div
                       className={`max-h-48 overflow-y-auto pb-1 pl-8 pr-2 ${
                         selected
-                          ? "text-[var(--primary-foreground)]/80"
+                          ? "text-[var(--foreground)]/75"
                           : "text-[var(--muted-foreground)]"
                       }`}
                     >
@@ -1843,7 +1974,7 @@ export default function App() {
         </aside>
 
         {/* Center */}
-        <main className="flex-1 flex flex-col overflow-hidden bg-[var(--background)]">
+        <main className="flex flex-1 flex-col overflow-hidden bg-transparent">
           {selectedCollection ? (
             showChat ? (
               <ChatPanel
@@ -1861,7 +1992,7 @@ export default function App() {
               />
             )
           ) : (
-            <div className="flex-1 flex items-center justify-center text-[var(--muted-foreground)] text-[14px]">
+            <div className="flex flex-1 items-center justify-center text-[14px] text-[var(--muted-foreground)]">
               Sammlung auswählen oder neu anlegen
             </div>
           )}
@@ -1896,7 +2027,7 @@ export default function App() {
 
         {/* Sources panel */}
           <div
-            className="shrink-0 overflow-hidden"
+            className="source-panel shrink-0 overflow-hidden"
             style={{ width: `${sourceWidth}px` }}
           >
             <SourcesPanel selection={selectedCitation} />

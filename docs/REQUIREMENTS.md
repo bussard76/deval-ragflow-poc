@@ -38,7 +38,8 @@ Eine Sammlung ist eine Gruppe von Dokumenten mit einem gemeinsamen inhaltlichen 
 - Nutzer:innen stellen eine Faktenfrage oder bitten um eine Zusammenfassung.
 - Das ausgewählte Chat-LLM erhält die Ergebnisse des Sammlung-GraphRAGs und formuliert daraus die Antwort.
 - Die Antwort wird als KI-generiert gekennzeichnet.
-- Nutzer:innen können pro Sammlung die Zahl der Retrieval-Chunks zwischen 5 und 20 in Einerschritten wählen; Standard ist 5. Die Einstellung gilt für Chat und Quellen-Retrieval dieser Sammlung.
+- Nutzer:innen können pro Sammlung über eine eingeklappte erweiterte Einstellung das **Trefferlimit** zwischen 5 und 20 maximalen Dokumentenergebnissen in Einerschritten wählen; Standard ist 5. Die Einstellung gilt für Chat und Quellen-Retrieval dieser Sammlung.
+- Die Chat-Historie bleibt browserlokal: Die zehn jüngsten Chats je Sammlung sind über ihr Startdatum auswählbar und können einzeln gelöscht werden.
 
 ### Zitationen
 
@@ -52,7 +53,7 @@ Eine Sammlung ist eine Gruppe von Dokumenten mit einem gemeinsamen inhaltlichen 
 - mehrere Sammlungen in einem Chat
 - `@`-Dokument-Mentions und Autocomplete
 - separate Quellensuche neben dem Chat
-- gespeicherte Chatverläufe oder Synchronisation
+- serverseitige Chatverläufe oder Synchronisation
 - Modellwechsel innerhalb eines laufenden Chats
 - echter PDF-Dokumentbrowser, Seitennavigation und Text-Highlighting
 - OCR, reine Scan-PDFs und vollständige Behandlung fehlerhafter Dateien
@@ -96,7 +97,7 @@ Eine Sammlung ist eine Gruppe von Dokumenten mit einem gemeinsamen inhaltlichen 
 
 ### AK-06: Retrieval-Kontext pro Sammlung
 
-- Die Oberfläche zeigt für die ausgewählte Sammlung eine Einstellung für 5 bis 20 Chunks in Einerschritten.
+- Die Oberfläche zeigt nahe dem Chat-Eingabefeld eine einklappbare erweiterte Einstellung für das Trefferlimit von 5 bis 20 maximalen Dokumentenergebnissen in Einerschritten.
 - Der Standardwert ist 5 und wird pro Sammlung lokal persistiert.
 - Eine Änderung wirkt auf nachfolgende Chatantworten und den separaten Quellen-Retrieval-Aufruf, nicht auf das RAGFlow-Chunking der Dokumente.
 
@@ -108,13 +109,13 @@ Diese Punkte sind bewusst gewählte Vereinfachungen für den allerersten MVP. Si
 - **A-02 Modellbindung:** Das Modell wird beim Chatstart gewählt und bleibt für diesen Chat fest. Modellwechsel innerhalb des Chats kommt später.
 - **A-03 Quellenansicht:** Zitationen werden zunächst nur angezeigt. Ein echter rechter PDF-Viewer wird später ergänzt; ein Mock ist nur für die visuelle Prüfung erlaubt und wird klar gekennzeichnet.
 - **A-04 Suche:** Eine separate Suchansicht wird zunächst nicht gebaut. Fragen und Zusammenfassungsaufträge laufen direkt über den Chat.
-- **A-05 Chat-Historie:** Chats werden im ersten UI-Slice nicht dauerhaft gespeichert. Lokale Sitzungen werden erst ergänzt, wenn der Kernflow passt.
+- **A-05 Chat-Historie:** Chats werden ausschließlich browserlokal je Sammlung gespeichert. Es bleiben die zehn jüngsten Chats erhalten; eine serverseitige Speicherung oder Synchronisation ist nicht Teil des MVP.
 - **A-06 Happy Path:** Für die erste Vorführung werden gültige, textbasierte PDFs vorausgesetzt. OCR, Scan-PDFs, Teilfehler und detaillierte Fehlerbehandlung sind bewusst nicht Teil der Abnahme.
 - **A-07 Sammlungsverwaltung:** Zunächst sind nur Anlegen und Auswählen erforderlich. Umbenennen, Löschen, Teilen und Rechteverwaltung folgen später.
 - **A-08 Backend-Echtheit:** Upload, GraphRAG-Aufbau, Retrieval und Chatantwort sollen echt funktionieren. Nur die optionale Quellenansicht darf visuell gemockt werden.
 - **A-09 Modellkonfiguration:** Modelle und Provider werden zentral über eine Konfigurationsdatei bereitgestellt; neben Ollama werden mindestens die drei bestätigten Pi.dev-Codex-IDs angeboten. Nutzer:innen können keine eigenen Modelle oder Zugangsdaten eintragen. Die tatsächliche Nutzung setzt den passenden Provider in RAGFlow voraus.
 - **A-10 Begriffsverständnis:** „Graph-Write“ wird in diesem Dokument als Aufbau des einen GraphRAG einer Sammlung verstanden. Falls damit ein separater Dienst gemeint ist, wird nur diese Bezeichnung angepasst.
-- **A-11 Retrieval-Kontext:** Die Auswahl 5–20 steuert nur die pro Frage abgerufenen Kontext-Chunks; sie ändert weder gespeicherte Dokument-Chunks noch deren Größe.
+- **A-11 Retrieval-Kontext:** Das Trefferlimit 5–20 steuert nur die pro Frage abgerufenen Kontextausschnitte; es ändert weder gespeicherte Dokument-Chunks noch deren Größe.
 
 ## 6. Leitprinzipien
 

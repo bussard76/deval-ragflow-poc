@@ -268,11 +268,11 @@ Danach das DEval-Backend auf `127.0.0.1:8790` starten und `https://deval.example
 4. Warten, bis die Dokumente verarbeitet sind. Der Chat kann danach bereits mit den verarbeiteten Dokumenten verwendet werden; ein laufender GraphRAG-Aufbau läuft unabhängig im Hintergrund.
 5. Ein konfiguriertes externes Chatmodell auswählen.
 6. Eine Frage stellen. Die Quellen erscheinen neben den relevanten Aussagen.
-7. Mit `+` im Chatkopf beliebig viele Chats je Sammlung im Browser anlegen und zwischen ihnen wechseln.
+7. Direkt über dem Eingabefeld einen neuen Chat anlegen oder einen vorhandenen Browser-Chat über Startdatum und erste Frage auswählen. Pro Sammlung bleiben die zehn jüngsten Chats erhalten; der ausgewählte Chat lässt sich über `×` löschen.
 8. Dokumente können in der aufklappbaren Sammlung gelöscht werden. Danach wird GraphRAG erneut aktualisiert.
 9. Eine ganze Sammlung lässt sich über das `×` neben ihrem Namen löschen. Dabei werden das RAGFlow-Dataset und die lokale Provenienz nach einer Bestätigung entfernt.
 10. Unter **Suche in** lassen sich Deutsch und English für die sprachübergreifende RAGFlow-Suche je Browser-Chat an- oder abwählen.
-11. Unter **Chunks** lässt sich pro Sammlung auswählen, wie viele Treffer je Frage verwendet werden: 5 bis 20 in Einerschritten. Der Standard ist 5.
+11. Über **Erweiterte Einstellungen** neben dem Eingabefeld lässt sich pro Sammlung das **Trefferlimit** wählen: 5 bis 20 maximale Dokumentenergebnisse je Frage, in Einerschritten. Der Standard ist 5.
 
 Die Sammlung ist im linken Bereich als Ordner dargestellt. Dokumente bleiben dort sichtbar und auswählbar. Chatverläufe und Modellwahl bleiben je Sammlung/Chat ausschließlich im Browser. Der Dateiname im Quellenbereich öffnet das vollständige PDF in einem neuen Tab; die Seitenvorschau und Provenienz bleiben lokal.
 
@@ -300,7 +300,7 @@ Wichtige Eigenschaften:
 - Zitate werden nicht vom LLM geraten: Die Chatantwort und die Quellenauflösung sind getrennt. `CitationResolver` ordnet RAGFlow-Referenzen deterministisch lokalen Seiten und Absätzen zu.
 - Der Webchat prüft die GraphRAG-Bereitschaft. Standardmäßig erzeugt er keine RAGFlow-Session und sendet den lokalen Verlauf über `/api/v1/openai/{chat_id}/chat/completions`; `DEVAL_RAGFLOW_STATELESS_CHAT=false` schaltet testweise auf den alten Session-Flow zurück. Ein technisches RAGFlow-Chat-Assistant-Objekt kann dabei vorhanden sein, enthält aber keine Chat-Nachrichten.
 - Die normale Quellenauflösung verwendet weiterhin einen separaten Retrieval-Aufruf ohne KG-Nutzung. Im CLI muss KG-Nutzung mit `query --use-kg` explizit angefordert werden.
-- Die Einstellung **Chunks** verändert nur die Anzahl der pro Frage abgerufenen Kontextausschnitte, nicht das RAGFlow-Chunking beim Upload. Mehr Treffer können die Abdeckung verbessern, erhöhen aber Kontextgröße, Latenz und Modellkosten.
+- Das **Trefferlimit** verändert nur die Anzahl der pro Frage abgerufenen Kontextausschnitte, nicht das RAGFlow-Chunking beim Upload. Mehr Treffer können die Abdeckung verbessern, erhöhen aber Kontextgröße, Latenz und Modellkosten.
 
 ## CLI
 
