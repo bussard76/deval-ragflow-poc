@@ -36,6 +36,7 @@ class FakeAdapter:
         self.last_dataset_created = True
         self.chat_llm_model = ""
         self.chat_cross_languages: list[str] = []
+        self.chat_retrieval_chunk_count = 0
         self.chat_session_calls = 0
         self.chat_completion_calls: list[dict[str, Any]] = []
         self.retrieve_calls: list[dict[str, object]] = []
@@ -83,9 +84,18 @@ class FakeAdapter:
     async def document_status(self, *args, **kwargs):
         return RemoteStatus("DONE", 1.0, "done", ("done",), 1, 1, {"run": "DONE"})
 
-    async def ensure_chat(self, name, dataset_ids, *, llm_model="", cross_languages=()):
+    async def ensure_chat(
+        self,
+        name,
+        dataset_ids,
+        *,
+        llm_model="",
+        cross_languages=(),
+        retrieval_chunk_count=5,
+    ):
         self.chat_llm_model = llm_model
         self.chat_cross_languages = list(cross_languages)
+        self.chat_retrieval_chunk_count = retrieval_chunk_count
         return {"id": "remote-chat"}
 
     async def create_chat_session(self, chat_id, *, name=""):
@@ -192,6 +202,15 @@ def test_web_application_wires_collection_upload_graph_and_chat(monkeypatch, con
     try:
         collection = app.create_collection("Web collection")
         assert collection["id"] == "Web collection"
+        assert collection["retrieval_chunk_count"] == 5
+        updated_settings = app.update_collection_settings(
+            "Web collection", {"retrieval_chunk_count": 12}
+        )
+        assert updated_settings["retrieval_chunk_count"] == 12
+        with pytest.raises(WebError, match="between 5 and 20"):
+            app.update_collection_settings(
+                "Web collection", {"retrieval_chunk_count": 21}
+            )
         assert app.models()[0]["id"] == "model"
 
         pending = app.start_upload("Web collection", [("golden.pdf", PDF.read_bytes())])
@@ -233,6 +252,9 @@ def test_web_application_wires_collection_upload_graph_and_chat(monkeypatch, con
         assert response["model"]["id"] == "model"
         assert response["cross_languages"] == ["German", "English"]
         assert len(response["citations"]) == 1
+        adapter = FakeAdapter.instances[-1]
+        assert adapter.chat_retrieval_chunk_count == 12
+        assert adapter.retrieve_calls[-1]["page_size"] == 12
         citation = response["citations"][0]
         passage_uid = citation["source"]["passage_uid"]
         expected_excerpt = next(
@@ -482,11 +504,27 @@ def test_http_api_exposes_health_and_models(config, monkeypatch):
         assert models.status == 200
         assert json.loads(models.read())["models"][0]["id"] == "model"
 
-        app.create_collection("Delete via HTTP")
-        connection.request("DELETE", "/api/collections/Delete%20via%20HTTP")
+        app.create_collection("Settings via HTTP")
+        settings_body = json.dumps({"retrieval_chunk_count": 12}).encode()
+        connection.request(
+            "PATCH",
+            "/api/collections/Settings%20via%20HTTP",
+            body=settings_body,
+            headers={
+                "Content-Type": "application/json",
+                "Content-Length": str(len(settings_body)),
+            },
+        )
+        settings = connection.getresponse()
+        assert settings.status == 200
+        assert json.loads(settings.read())["retrieval_chunk_count"] == 12
+
+        connection.request(
+            "DELETE", "/api/collections/Settings%20via%20HTTP"
+        )
         deleted = connection.getresponse()
         assert deleted.status == 200
-        assert json.loads(deleted.read())["deleted"] == "Delete via HTTP"
+        assert json.loads(deleted.read())["deleted"] == "Settings via HTTP"
     finally:
         connection.close()
         server.shutdown()

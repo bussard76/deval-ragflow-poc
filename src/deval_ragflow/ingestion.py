@@ -78,18 +78,23 @@ class IngestionService:
         remote_id = str(remote.get("id", ""))
         if not remote_id:
             raise AdapterError("RAGFlow dataset response has no id")
+        dataset_config = dict(existing.config) if existing is not None else {}
+        dataset_config.update(
+            {
+                "chunk_method": self.config.chunk_method,
+                "parser_config": self.config.parser_config,
+                "embedding_model": self.config.embedding_model,
+                "llm_model": self.config.llm_model,
+            }
+        )
+        dataset_config.setdefault("retrieval_chunk_count", 5)
         dataset = self.registry.upsert_dataset(
             self.config.dataset_scope,
             remote_id,
             self.config.dataset_name,
             self.config.embedding_model,
             self.config.llm_model,
-            {
-                "chunk_method": self.config.chunk_method,
-                "parser_config": self.config.parser_config,
-                "embedding_model": self.config.embedding_model,
-                "llm_model": self.config.llm_model,
-            },
+            dataset_config,
             owned=existing.owned
             if existing is not None
             else bool(getattr(self.adapter, "last_dataset_created", False)),

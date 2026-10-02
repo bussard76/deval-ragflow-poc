@@ -378,6 +378,9 @@ def test_ensure_chat_reapplies_llm_id_to_existing_chat():
             body = json.loads(request.content)
             assert body["dataset_ids"] == ["dataset"]
             assert body["llm_id"] == "model"
+            assert body["top_n"] == 12
+            assert body["top_k"] == 20
+            assert body["rerank_candidates_count"] == 20
             return httpx.Response(
                 200,
                 json={"code": 0, "data": {"id": "chat", "name": "deval-cli-dataset"}},
@@ -392,7 +395,10 @@ def test_ensure_chat_reapplies_llm_id_to_existing_chat():
         )
         try:
             chat = await adapter.ensure_chat(
-                "deval-cli-dataset", ["dataset"], llm_model="model"
+                "deval-cli-dataset",
+                ["dataset"],
+                llm_model="model",
+                retrieval_chunk_count=12,
             )
             assert chat["id"] == "chat"
         finally:

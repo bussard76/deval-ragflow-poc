@@ -13,6 +13,7 @@ import {
   listCollections,
   listModels,
   sendChat,
+  updateCollectionSettings,
   uploadCollection,
 } from "./api"
 
@@ -47,6 +48,10 @@ const RAGFLOW_WEB_URL = (
 ).replace(/\/+$/, "")
 // Keep the pre-selector behavior by default; users can opt into either or both.
 const DEFAULT_CROSS_LANGUAGES: CrossLanguage[] = []
+const RETRIEVAL_CHUNK_OPTIONS = Array.from(
+  { length: 16 },
+  (_, index) => index + 5,
+)
 
 function chatStorageKey(collectionId: string) {
   return `${CHAT_STORAGE_PREFIX}${encodeURIComponent(collectionId)}`
@@ -688,16 +693,19 @@ function ChatPanel({
   collection,
   models,
   onCitationSelect,
+  onRetrievalChunkCountChange,
 }: {
   collection: Collection
   models: Model[]
   onCitationSelect: (selection: CitationSelection | null) => void
+  onRetrievalChunkCountChange: (count: number) => Promise<void>
 }) {
   const [chatState, setChatState] = useState<StoredChatState>(() =>
     readStoredChats(collection.id),
   )
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
+  const [savingChunkCount, setSavingChunkCount] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
   const conversationId = useRef(crypto.randomUUID())
   const skipChatPersistRef = useRef(false)
@@ -761,6 +769,16 @@ function ChatPanel({
         ),
       }
     })
+  }
+
+  async function changeRetrievalChunkCount(count: number) {
+    if (loading || savingChunkCount) return
+    setSavingChunkCount(true)
+    try {
+      await onRetrievalChunkCountChange(count)
+    } finally {
+      setSavingChunkCount(false)
+    }
   }
 
   useEffect(() => {
@@ -1029,6 +1047,29 @@ function ChatPanel({
               </label>
             ))}
           </fieldset>
+          <label
+            htmlFor="retrieval-chunk-count"
+            className="font-mono text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider shrink-0"
+          >
+            Chunks
+          </label>
+          <select
+            id="retrieval-chunk-count"
+            value={collection.retrieval_chunk_count ?? 5}
+            onChange={(event) =>
+              void changeRetrievalChunkCount(Number(event.target.value))
+            }
+            disabled={loading || savingChunkCount}
+            aria-label="Anzahl der Retrieval-Chunks"
+            title="Anzahl der Textabschnitte pro Anfrage"
+            className="w-16 shrink-0 rounded border border-[var(--border)] bg-[var(--card)] px-2 py-1.5 text-[13px] text-[var(--foreground)] focus:outline-none focus:border-[var(--accent)] transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {RETRIEVAL_CHUNK_OPTIONS.map((count) => (
+              <option key={count} value={count}>
+                {count}
+              </option>
+            ))}
+          </select>
           <label
             htmlFor="model-select"
             className="font-mono text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider shrink-0"
@@ -1371,6 +1412,25 @@ export default function App() {
         createError instanceof Error
           ? createError.message
           : "Sammlung konnte nicht angelegt werden",
+      )
+    }
+  }
+
+  async function handleRetrievalChunkCountChange(count: number) {
+    if (!selectedId) return
+    setError("")
+    try {
+      const updated = await updateCollectionSettings(selectedId, count)
+      setCollections((current) =>
+        current.map((collection) =>
+          collection.id === updated.id ? updated : collection,
+        ),
+      )
+    } catch (updateError) {
+      setError(
+        updateError instanceof Error
+          ? updateError.message
+          : "Retrieval-Einstellung konnte nicht gespeichert werden",
       )
     }
   }
@@ -1790,6 +1850,9 @@ export default function App() {
                 collection={selectedCollection}
                 models={models}
                 onCitationSelect={setSelectedCitation}
+                onRetrievalChunkCountChange={
+                  handleRetrievalChunkCountChange
+                }
               />
             ) : (
               <UploadPanel

@@ -428,6 +428,7 @@ class RAGFlowAdapter:
         *,
         llm_model: str = "",
         cross_languages: Sequence[str] | None = None,
+        retrieval_chunk_count: int = 5,
     ) -> dict[str, Any]:
         if not isinstance(name, str) or not name.strip():
             raise AdapterError("RAGFlow chat name must not be empty")
@@ -445,13 +446,14 @@ class RAGFlowAdapter:
             raise ReconciliationError(
                 f"more than one RAGFlow chat has the deterministic name {name!r}"
             )
+        chunk_count = max(1, int(retrieval_chunk_count))
         chat_settings = {
             "dataset_ids": ids,
             # Give the model several retrieved chunks so broad summary questions
             # summarize the source material instead of one arbitrary chunk.
-            "top_n": 5,
-            "top_k": 20,
-            "rerank_candidates_count": 20,
+            "top_n": chunk_count,
+            "top_k": max(20, chunk_count),
+            "rerank_candidates_count": max(20, chunk_count),
             "similarity_threshold": 0.0,
             "llm_setting": {"temperature": 0.1, "max_completion_tokens": 512},
             # Keep the summary broad and let RAGFlow place source markers next

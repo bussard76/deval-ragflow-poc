@@ -30,10 +30,25 @@ from .registry import Registry
 
 MAX_NAME_LENGTH = 160
 MAX_QUESTION_LENGTH = 10_000
+RETRIEVAL_CHUNK_MIN = 5
+RETRIEVAL_CHUNK_MAX = 20
+DEFAULT_RETRIEVAL_CHUNKS = 5
 _ALLOWED_ORIGINS = {"http://localhost:5173", "http://127.0.0.1:5173"}
 _FILENAME_RE = re.compile(r'filename="([^"]*)"', re.IGNORECASE)
 CROSS_LANGUAGE_OPTIONS = ("German", "English")
 _CROSS_LANGUAGE_SET = frozenset(CROSS_LANGUAGE_OPTIONS)
+
+
+def _bounded_retrieval_chunks(value: Any) -> int:
+    if isinstance(value, bool):
+        return DEFAULT_RETRIEVAL_CHUNKS
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_RETRIEVAL_CHUNKS
+    if not RETRIEVAL_CHUNK_MIN <= parsed <= RETRIEVAL_CHUNK_MAX:
+        return DEFAULT_RETRIEVAL_CHUNKS
+    return parsed
 
 
 class WebError(Exception):
@@ -214,6 +229,48 @@ class WebApplication:
     def _collection_config(self, name: str) -> Config:
         return replace(self.config, dataset_name=name)
 
+    @staticmethod
+    def _retrieval_chunks(dataset: Any) -> int:
+        config = getattr(dataset, "config", {})
+        value = config.get("retrieval_chunk_count") if isinstance(config, dict) else None
+        return _bounded_retrieval_chunks(value)
+
+    def _invalidate_chat_handles(self, collection_scope: str) -> None:
+        with self._lock:
+            self._chats = {
+                key: handle
+                for key, handle in self._chats.items()
+                if handle.collection_scope != collection_scope
+            }
+
+    def update_collection_settings(
+        self, scope: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        dataset = self.registry.get_dataset(scope)
+        if dataset is None:
+            raise WebError(404, "collection not found")
+        value = payload.get("retrieval_chunk_count")
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise WebError(400, "retrieval_chunk_count must be an integer")
+        if not RETRIEVAL_CHUNK_MIN <= value <= RETRIEVAL_CHUNK_MAX:
+            raise WebError(
+                400,
+                f"retrieval_chunk_count must be between {RETRIEVAL_CHUNK_MIN} and {RETRIEVAL_CHUNK_MAX}",
+            )
+        config = dict(dataset.config)
+        config["retrieval_chunk_count"] = value
+        self.registry.upsert_dataset(
+            dataset.dataset_scope,
+            dataset.remote_dataset_id,
+            dataset.name,
+            dataset.embedding_model,
+            dataset.llm_model,
+            config,
+            owned=dataset.owned,
+        )
+        self._invalidate_chat_handles(scope)
+        return self._collection_view(scope)
+
     def _remote_model_options(self) -> list[ModelOption]:
         async def load() -> list[dict[str, Any]]:
             adapter = RAGFlowAdapter(
@@ -262,18 +319,23 @@ class WebApplication:
         remote_id = str(remote.get("id", ""))
         if not remote_id:
             raise DevalError("RAGFlow dataset response has no id")
+        dataset_config = dict(existing.config) if existing is not None else {}
+        dataset_config.update(
+            {
+                "chunk_method": config.chunk_method,
+                "parser_config": config.parser_config,
+                "embedding_model": config.embedding_model,
+                "llm_model": config.llm_model,
+            }
+        )
+        dataset_config.setdefault("retrieval_chunk_count", DEFAULT_RETRIEVAL_CHUNKS)
         return self.registry.upsert_dataset(
             config.dataset_scope,
             remote_id,
             config.dataset_name,
             config.embedding_model,
             config.llm_model,
-            {
-                "chunk_method": config.chunk_method,
-                "parser_config": config.parser_config,
-                "embedding_model": config.embedding_model,
-                "llm_model": config.llm_model,
-            },
+            dataset_config,
             owned=(
                 existing.owned
                 if existing is not None
@@ -385,6 +447,7 @@ class WebApplication:
             "id": dataset.dataset_scope,
             "name": dataset.name,
             "status": self._collection_status(scope, graph_view),
+            "retrieval_chunk_count": self._retrieval_chunks(dataset),
             "documents": documents,
             "document_records": document_records,
             "graph": graph_view,
@@ -822,6 +885,7 @@ class WebApplication:
         model: ModelOption,
         conversation_id: str,
         cross_languages: list[str] | None = None,
+        retrieval_chunk_count: int = DEFAULT_RETRIEVAL_CHUNKS,
     ) -> ChatHandle:
         cache_key = conversation_id
         chat_name = f"deval-web-{conversation_id}"
@@ -847,6 +911,7 @@ class WebApplication:
             [dataset.remote_dataset_id],
             llm_model=model.ragflow_model,
             cross_languages=cross_languages,
+            retrieval_chunk_count=retrieval_chunk_count,
         )
         chat_id = str(chat.get("id", ""))
         if not chat_id:
@@ -871,14 +936,15 @@ class WebApplication:
         question: str,
         cross_languages: list[str] | None = None,
     ) -> tuple[Any, list[Any]]:
+        chunk_count = self._retrieval_chunks(dataset)
         retrieved = await adapter.retrieve(
             question,
             [dataset.remote_dataset_id],
-            page_size=5,
+            page_size=chunk_count,
             similarity_threshold=0.0,
-            knn_top_k=20,
-            knn_num_candidates=40,
-            rerank_candidates_count=20,
+            knn_top_k=max(20, chunk_count),
+            knn_num_candidates=max(40, chunk_count),
+            rerank_candidates_count=max(20, chunk_count),
             highlight=False,
             use_kg=False,
             cross_languages=cross_languages,
@@ -962,7 +1028,12 @@ class WebApplication:
             )
             try:
                 await self._ensure_chat_session(
-                    adapter, dataset, model, conversation_id, languages
+                    adapter,
+                    dataset,
+                    model,
+                    conversation_id,
+                    languages,
+                    self._retrieval_chunks(dataset),
                 )
             finally:
                 await adapter.aclose()
@@ -1103,7 +1174,12 @@ class WebApplication:
             )
             try:
                 handle = await self._ensure_chat_session(
-                    adapter, dataset, model, conversation_id, languages
+                    adapter,
+                    dataset,
+                    model,
+                    conversation_id,
+                    languages,
+                    self._retrieval_chunks(dataset),
                 )
                 completion = await adapter.chat_completion(
                     handle.chat_id,
@@ -1172,7 +1248,7 @@ class WebHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
         self.end_headers()
         self.wfile.write(body)
 
@@ -1283,6 +1359,24 @@ class WebHandler(BaseHTTPRequestHandler):
                 )
                 return
             raise WebError(404, "endpoint not found")
+        except Exception as exc:  # noqa: BLE001 - convert expected and unexpected errors
+            self._error(exc)
+
+    def do_PATCH(self) -> None:
+        try:
+            path = urlparse(self.path).path.rstrip("/") or "/"
+            prefix = "/api/collections/"
+            if not path.startswith(prefix):
+                raise WebError(404, "endpoint not found")
+            payload = json.loads(self._body().decode("utf-8"))
+            if not isinstance(payload, dict):
+                raise WebError(400, "request body must be an object")
+            scope = unquote(path.removeprefix(prefix)).strip("/")
+            self._send(200, self.application.update_collection_settings(scope, payload))
+        except json.JSONDecodeError:
+            self._error(WebError(400, "request body is not valid JSON"))
+        except UnicodeDecodeError:
+            self._error(WebError(400, "request body is not valid UTF-8"))
         except Exception as exc:  # noqa: BLE001 - convert expected and unexpected errors
             self._error(exc)
 

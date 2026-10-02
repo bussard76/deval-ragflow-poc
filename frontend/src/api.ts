@@ -21,6 +21,7 @@ export interface Collection {
   id: string
   name: string
   status: GraphRAGStatus
+  retrieval_chunk_count: number
   documents: string[]
   document_records: CollectionDocument[]
   graph: GraphInfo
@@ -116,6 +117,20 @@ export async function uploadCollection(
     method: "POST",
     body: form,
   })
+}
+
+export async function updateCollectionSettings(
+  id: string,
+  retrievalChunkCount: number,
+): Promise<Collection> {
+  return request<Collection>(
+    `/collections/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ retrieval_chunk_count: retrievalChunkCount }),
+    },
+  )
 }
 
 export async function deleteCollection(id: string): Promise<void> {

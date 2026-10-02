@@ -38,6 +38,7 @@ Eine Sammlung ist eine Gruppe von Dokumenten mit einem gemeinsamen inhaltlichen 
 - Nutzer:innen stellen eine Faktenfrage oder bitten um eine Zusammenfassung.
 - Das ausgewählte Chat-LLM erhält die Ergebnisse des Sammlung-GraphRAGs und formuliert daraus die Antwort.
 - Die Antwort wird als KI-generiert gekennzeichnet.
+- Nutzer:innen können pro Sammlung die Zahl der Retrieval-Chunks zwischen 5 und 20 in Einerschritten wählen; Standard ist 5. Die Einstellung gilt für Chat und Quellen-Retrieval dieser Sammlung.
 
 ### Zitationen
 
@@ -93,6 +94,12 @@ Eine Sammlung ist eine Gruppe von Dokumenten mit einem gemeinsamen inhaltlichen 
 - Der vollständige Happy Path ist in einer zusammenhängenden Oberfläche sichtbar: Sammlung, Upload-/Bereitschaftszustand, Chat, Modellwahl und Antwort.
 - Ein optionaler Quellenfenster-Mock ist eindeutig als „Prototyp“ oder „nicht implementiert“ gekennzeichnet.
 
+### AK-06: Retrieval-Kontext pro Sammlung
+
+- Die Oberfläche zeigt für die ausgewählte Sammlung eine Einstellung für 5 bis 20 Chunks in Einerschritten.
+- Der Standardwert ist 5 und wird pro Sammlung lokal persistiert.
+- Eine Änderung wirkt auf nachfolgende Chatantworten und den separaten Quellen-Retrieval-Aufruf, nicht auf das RAGFlow-Chunking der Dokumente.
+
 ## 5. Änderbare Annahmen und Defaults
 
 Diese Punkte sind bewusst gewählte Vereinfachungen für den allerersten MVP. Sie sind keine Festlegung für die spätere Produktversion:
@@ -107,6 +114,7 @@ Diese Punkte sind bewusst gewählte Vereinfachungen für den allerersten MVP. Si
 - **A-08 Backend-Echtheit:** Upload, GraphRAG-Aufbau, Retrieval und Chatantwort sollen echt funktionieren. Nur die optionale Quellenansicht darf visuell gemockt werden.
 - **A-09 Modellkonfiguration:** Modelle und Provider werden zentral über eine Konfigurationsdatei bereitgestellt; neben Ollama werden mindestens die drei bestätigten Pi.dev-Codex-IDs angeboten. Nutzer:innen können keine eigenen Modelle oder Zugangsdaten eintragen. Die tatsächliche Nutzung setzt den passenden Provider in RAGFlow voraus.
 - **A-10 Begriffsverständnis:** „Graph-Write“ wird in diesem Dokument als Aufbau des einen GraphRAG einer Sammlung verstanden. Falls damit ein separater Dienst gemeint ist, wird nur diese Bezeichnung angepasst.
+- **A-11 Retrieval-Kontext:** Die Auswahl 5–20 steuert nur die pro Frage abgerufenen Kontext-Chunks; sie ändert weder gespeicherte Dokument-Chunks noch deren Größe.
 
 ## 6. Leitprinzipien
 
